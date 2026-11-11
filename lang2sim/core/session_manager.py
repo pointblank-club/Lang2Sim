@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -22,11 +22,11 @@ class ToolCallRecord(BaseModel):
     """Execution record of an agentic tool call."""
 
     tool_name: str
-    arguments: Dict[str, Any] = Field(default_factory=dict)
+    arguments: dict[str, Any] = Field(default_factory=dict)
     duration_str: str = "0.0s"
     status: str = "completed"  # "running", "completed", "failed"
-    output: Optional[Any] = None
-    error: Optional[str] = None
+    output: Any | None = None
+    error: str | None = None
 
 
 class ArtifactRecord(BaseModel):
@@ -41,27 +41,31 @@ class ArtifactRecord(BaseModel):
 class SimulationStateSnapshot(BaseModel):
     """Real-time simulation state snapshot."""
 
-    world_sdf: Optional[str] = None
-    map_yaml: Optional[str] = None
+    world_sdf: str | None = None
+    map_yaml: str | None = None
     active_robot: str = "turtlebot3_waffle"
     ate_drift_m: float = 0.0
     status: str = "idle"  # "idle", "sim_running", "navigating", "paused"
 
 
 class ChatMessage(BaseModel):
+    """Single conversational turn or tool interaction in a chat session."""
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
     role: str  # "user", "assistant", "system", "tool"
     content: str = ""
     timestamp: float = Field(default_factory=time.time)
     tokens: int = 0
     # Thinking & Cognitive Reasoning
-    thought: Optional[str] = None
-    thought_duration_str: Optional[str] = None
+    thought: str | None = None
+    thought_duration_str: str | None = None
     # Tool Invocation Actions
-    actions: List[ToolCallRecord] = Field(default_factory=list)
+    actions: list[ToolCallRecord] = Field(default_factory=list)
 
 
 class ChatSession(BaseModel):
+    """Complete conversational workspace session containing messages, artifacts, and state."""
+
     id: str = Field(
         default_factory=lambda: (
             datetime.now().strftime("session_%Y%m%d_%H%M%S_") + str(uuid.uuid4())[:4]
@@ -71,18 +75,18 @@ class ChatSession(BaseModel):
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
     pinned: bool = False
-    messages: List[ChatMessage] = Field(default_factory=list)
+    messages: list[ChatMessage] = Field(default_factory=list)
     total_tokens: int = 0
     workspace_name: str = "active_project"
-    active_run_dir: Optional[str] = None
-    artifacts: List[ArtifactRecord] = Field(default_factory=list)
+    active_run_dir: str | None = None
+    artifacts: list[ArtifactRecord] = Field(default_factory=list)
     simulation_state: SimulationStateSnapshot = Field(default_factory=SimulationStateSnapshot)
 
 
 class SessionManager:
     """Manages creation, persistence, retrieval, and grouping of chat sessions."""
 
-    def __init__(self, sessions_dir: Optional[Path] = None):
+    def __init__(self, sessions_dir: Path | None = None) -> None:
         self.sessions_dir = sessions_dir or SESSIONS_DIR
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
@@ -93,15 +97,17 @@ class SessionManager:
         self,
         title: str = "New Session",
         workspace_name: str = "active_project",
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
     ) -> ChatSession:
+        """Create and persist a session, optionally seeding it with a system prompt."""
         session = ChatSession(title=title, workspace_name=workspace_name)
         if system_prompt:
             session.messages.append(ChatMessage(role="system", content=system_prompt))
         self.save_session(session)
         return session
 
-    def get_session(self, session_id: str) -> Optional[ChatSession]:
+    def get_session(self, session_id: str) -> ChatSession | None:
+        """Load a session by ID, returning ``None`` if it is missing or invalid."""
         p = self._file_path(session_id)
         if not p.is_file():
             return None
@@ -112,11 +118,13 @@ class SessionManager:
             return None
 
     def save_session(self, session: ChatSession) -> None:
+        """Update the session timestamp and write its JSON representation to disk."""
         session.updated_at = time.time()
         p = self._file_path(session.id)
         p.write_text(session.model_dump_json(indent=2), encoding="utf-8")
 
     def delete_session(self, session_id: str) -> bool:
+        """Delete a stored session, returning whether its file was removed."""
         p = self._file_path(session_id)
         if p.is_file():
             try:
@@ -126,7 +134,8 @@ class SessionManager:
                 return False
         return False
 
-    def pin_session(self, session_id: str, pinned: Optional[bool] = None) -> bool:
+    def pin_session(self, session_id: str, pinned: bool | None = None) -> bool:
+        """Set or toggle a session's pinned state and persist it."""
         session = self.get_session(session_id)
         if not session:
             return False
@@ -138,6 +147,7 @@ class SessionManager:
         return True
 
     def rename_session(self, session_id: str, new_title: str) -> bool:
+        """Rename a session, replacing blank titles with ``Untitled Session``."""
         session = self.get_session(session_id)
         if not session:
             return False
@@ -145,9 +155,9 @@ class SessionManager:
         self.save_session(session)
         return True
 
-    def list_sessions(self, workspace_name: Optional[str] = None) -> List[ChatSession]:
+    def list_sessions(self, workspace_name: str | None = None) -> list[ChatSession]:
         """Lists all stored sessions sorted by pinned first, then by updated_at descending."""
-        sessions: List[ChatSession] = []
+        sessions: list[ChatSession] = []
         for p in self.sessions_dir.glob("*.json"):
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
@@ -161,7 +171,7 @@ class SessionManager:
         sessions.sort(key=lambda s: (not s.pinned, -s.updated_at))
         return sessions
 
-    def group_sessions_by_date(self, sessions: List[ChatSession]) -> Dict[str, List[ChatSession]]:
+    def group_sessions_by_date(self, sessions: list[ChatSession]) -> dict[str, list[ChatSession]]:
         """
         Groups sessions chronologically matching OpenCode:
         - "Today"
@@ -170,7 +180,7 @@ class SessionManager:
         """
         today = date.today()
         yesterday = today - timedelta(days=1)
-        grouped: Dict[str, List[ChatSession]] = {}
+        grouped: dict[str, list[ChatSession]] = {}
 
         for s in sessions:
             s_date = datetime.fromtimestamp(s.updated_at).date()

@@ -3,8 +3,9 @@ Interactive Terminal Command & Permission Card Widget
 File: lang2sim/cli/widgets/command_card.py
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.message import Message
@@ -103,7 +104,7 @@ class CommandCard(Widget):
     class Approved(Message):
         """User approved command execution."""
 
-        def __init__(self, event_id: str, always_allow: bool = False):
+        def __init__(self, event_id: str, always_allow: bool = False) -> None:
             super().__init__()
             self.event_id = event_id
             self.always_allow = always_allow
@@ -111,7 +112,7 @@ class CommandCard(Widget):
     class Rejected(Message):
         """User rejected command execution."""
 
-        def __init__(self, event_id: str):
+        def __init__(self, event_id: str) -> None:
             super().__init__()
             self.event_id = event_id
 
@@ -120,10 +121,10 @@ class CommandCard(Widget):
         event_id: str,
         command: str,
         tool_name: str = "run_command",
-        arguments: Optional[Dict[str, Any]] = None,
+        arguments: dict[str, Any] | None = None,
         permission_required: bool = True,
-        **kwargs,
-    ):
+        **kwargs: object,
+    ) -> None:
         super().__init__(**kwargs)
         self.event_id = event_id
         self.command = command
@@ -131,12 +132,13 @@ class CommandCard(Widget):
         self.arguments = arguments or {}
         self.permission_required = permission_required
         self.status = "awaiting_permission" if permission_required else "running"
-        self.exit_code: Optional[int] = None
+        self.exit_code: int | None = None
         self.duration_str: str = "0.0s"
         self.stdout: str = ""
         self.stderr: str = ""
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
+        """Render command details, permission controls, and an output area."""
         # Header: Title + Status Badge
         with Horizontal(classes="cmd-header"):
             yield Static(
@@ -163,6 +165,7 @@ class CommandCard(Widget):
         yield Static("", id="cmd-output", classes="cmd-output", expand=True)
 
     def on_mount(self) -> None:
+        """Initialize status styling, hide output, and focus approval when needed."""
         self._update_classes()
         out_widget = self.query_one("#cmd-output", Static)
         out_widget.display = False
@@ -204,6 +207,7 @@ class CommandCard(Widget):
             self.add_class("status-rejected")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Dispatch the pressed approval, always-allow, or reject action."""
         btn_id = event.button.id or ""
         if "btn-approve" in btn_id:
             self.action_approve()
@@ -213,18 +217,21 @@ class CommandCard(Widget):
             self.action_reject()
 
     def action_approve(self) -> None:
+        """Approve this command once and emit an approval message."""
         if self.status != "awaiting_permission":
             return
         self.set_running()
         self.post_message(self.Approved(self.event_id, always_allow=False))
 
     def action_always_allow(self) -> None:
+        """Approve this command and request that later commands be allowed."""
         if self.status != "awaiting_permission":
             return
         self.set_running()
         self.post_message(self.Approved(self.event_id, always_allow=True))
 
     def action_reject(self) -> None:
+        """Reject the command, remove approval controls, and emit a rejection."""
         if self.status != "awaiting_permission":
             return
         self.status = "rejected"
@@ -241,6 +248,7 @@ class CommandCard(Widget):
             pass
 
     def set_running(self) -> None:
+        """Mark the command as running and remove its permission controls."""
         self.status = "running"
         self._update_classes()
         self._remove_actions_row()
@@ -252,6 +260,7 @@ class CommandCard(Widget):
     def set_result(
         self, exit_code: int, duration_str: str, stdout: str = "", stderr: str = ""
     ) -> None:
+        """Display the completed command's exit code, duration, stdout, and stderr."""
         self.status = "completed"
         self.exit_code = exit_code
         self.duration_str = duration_str

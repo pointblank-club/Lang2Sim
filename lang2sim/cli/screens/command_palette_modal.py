@@ -3,14 +3,13 @@ Custom Command Palette Modal (ctrl+p)
 File: lang2sim/cli/screens/command_palette_modal.py
 """
 
-from typing import Dict, List, Optional
-
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
-COMMANDS: List[Dict[str, str]] = [
+COMMANDS: list[dict[str, str]] = [
     # Suggested
     {
         "id": "switch_session",
@@ -87,7 +86,7 @@ COMMANDS: List[Dict[str, str]] = [
 ]
 
 
-class CommandPaletteModal(ModalScreen[Optional[str]]):
+class CommandPaletteModal(ModalScreen[str | None]):
     """Floating Command Palette Modal matching OpenCode UI."""
 
     BINDINGS = [
@@ -97,12 +96,13 @@ class CommandPaletteModal(ModalScreen[Optional[str]]):
         Binding("enter", "submit_selected", "Select", show=False),
     ]
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self.selected_index: int = 0
-        self.filtered_commands: List[Dict[str, str]] = list(COMMANDS)
+        self.filtered_commands: list[dict[str, str]] = list(COMMANDS)
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
+        """Build the search field and command-list layout."""
         with Vertical(id="command-palette-dialog"):
             with Horizontal(id="palette-header"):
                 yield Static("Commands", id="palette-title")
@@ -112,10 +112,12 @@ class CommandPaletteModal(ModalScreen[Optional[str]]):
             yield VerticalScroll(id="palette-list")
 
     async def on_mount(self) -> None:
+        """Focus command search and render the initial command list."""
         self.query_one(Input).focus()
         await self.rebuild_list()
 
     async def on_input_changed(self, event: Input.Changed) -> None:
+        """Filter commands by the entered title, category, or description."""
         query = event.value.strip().lower()
         if not query:
             self.filtered_commands = list(COMMANDS)
@@ -131,9 +133,11 @@ class CommandPaletteModal(ModalScreen[Optional[str]]):
         await self.rebuild_list()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Submit the currently selected command when search is confirmed."""
         self.action_submit_selected()
 
     async def rebuild_list(self) -> None:
+        """Replace the visible rows with the current filtered command list."""
         list_container = self.query_one("#palette-list", VerticalScroll)
         await list_container.remove_children()
 
@@ -169,6 +173,7 @@ class CommandPaletteModal(ModalScreen[Optional[str]]):
             current_item_idx += 1
 
     def update_selection(self) -> None:
+        """Highlight and scroll to the selected command row."""
         rows = list(self.query("#palette-list .palette-item"))
         for idx, row in enumerate(rows):
             row.set_class(idx == self.selected_index, "-selected")
@@ -176,16 +181,19 @@ class CommandPaletteModal(ModalScreen[Optional[str]]):
             rows[self.selected_index].scroll_visible(animate=False)
 
     def action_cursor_up(self) -> None:
+        """Move selection to the previous available command."""
         if self.filtered_commands and self.selected_index > 0:
             self.selected_index -= 1
             self.update_selection()
 
     def action_cursor_down(self) -> None:
+        """Move selection to the next available command."""
         if self.filtered_commands and self.selected_index < len(self.filtered_commands) - 1:
             self.selected_index += 1
             self.update_selection()
 
     def action_submit_selected(self) -> None:
+        """Dismiss the palette with the selected command ID, if any."""
         if self.filtered_commands and 0 <= self.selected_index < len(self.filtered_commands):
             cmd = self.filtered_commands[self.selected_index]
             self.dismiss(cmd["id"])
@@ -193,4 +201,5 @@ class CommandPaletteModal(ModalScreen[Optional[str]]):
             self.dismiss(None)
 
     def action_dismiss_modal(self) -> None:
+        """Close the palette without selecting a command."""
         self.dismiss(None)

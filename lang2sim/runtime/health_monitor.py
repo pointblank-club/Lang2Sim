@@ -11,7 +11,7 @@ health_status, /v1/sim/health and the self-healer.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Optional
+from typing import Literal
 
 from lang2sim.runtime.ros_bridge import RosSnapshot, readiness
 
@@ -24,22 +24,27 @@ STALL_S = 5.0  # clock not advancing this long while the process runs = stalled
 
 @dataclass
 class HealthReport:
+    """Aggregated health assessment with RTF, sim time, and per-topic readiness flags."""
+
     health: Health
-    issues: List[str] = field(default_factory=list)
-    rtf: Optional[float] = None
+    issues: list[str] = field(default_factory=list)
+    rtf: float | None = None
     sim_time: float = 0.0
-    readiness: Dict[str, bool] = field(default_factory=dict)
+    readiness: dict[str, bool] = field(default_factory=dict)
 
 
 class HealthMonitor:
+    """Stateful health evaluator that debounces low-RTF transients before reporting degraded."""
+
     def __init__(self, low_rtf: float = LOW_RTF, low_rtf_for_s: float = LOW_RTF_FOR_S) -> None:
         self.low_rtf, self.low_rtf_for_s = low_rtf, low_rtf_for_s
-        self._low_since: Optional[float] = None
+        self._low_since: float | None = None
 
     def reset(self) -> None:
+        """Clear the low-RTF timer used to debounce degraded-health reports."""
         self._low_since = None
 
-    def evaluate(self, process_status: str, snap: Optional[RosSnapshot]) -> HealthReport:
+    def evaluate(self, process_status: str, snap: RosSnapshot | None) -> HealthReport:
         """process_status: SimProcess.status() value (idle/launching/running/degraded/stopped/error)."""
         if process_status == "error":
             return HealthReport("crashed", ["simulation process exited with an error"])
@@ -48,7 +53,7 @@ class HealthMonitor:
             return HealthReport("healthy")
 
         checks = readiness(snap)
-        issues: List[str] = []
+        issues: list[str] = []
         if process_status == "launching":
             return HealthReport("healthy", [], snap.rtf, snap.sim_time, checks)
 

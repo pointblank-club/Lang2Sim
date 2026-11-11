@@ -5,7 +5,7 @@ File: lang2sim/world_gen/catalog_loader.py
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from lang2sim.core.config import get_catalog_dir
 from lang2sim.core.models import ObjectSpec, Pose2D, Vector3D
@@ -14,22 +14,22 @@ from lang2sim.core.models import ObjectSpec, Pose2D, Vector3D
 class SceneCatalog:
     """Interface to inspect pre-built scenes, semantic anchors, and catalog models."""
 
-    def __init__(self, catalog_dir: Optional[Path] = None):
+    def __init__(self, catalog_dir: Path | None = None) -> None:
         self.catalog_dir = catalog_dir or get_catalog_dir()
         self.catalog_file = self.catalog_dir / "scene_catalog.json"
-        self._data: Dict[str, Any] = self._load()
+        self._data: dict[str, Any] = self._load()
 
-    def _load(self) -> Dict[str, Any]:
+    def _load(self) -> dict[str, Any]:
         if not self.catalog_file.exists():
             raise FileNotFoundError(f"Catalog file not found: {self.catalog_file}")
         with open(self.catalog_file, encoding="utf-8") as f:
             return json.load(f)
 
-    def list_scenes(self) -> List[str]:
+    def list_scenes(self) -> list[str]:
         """List all pre-built scene IDs (e.g. 'aws_small_warehouse', 'robotics_lab')."""
         return list(self._data.get("scenes", {}).keys())
 
-    def get_scene(self, scene_id: str) -> Dict[str, Any]:
+    def get_scene(self, scene_id: str) -> dict[str, Any]:
         """Retrieve full metadata for a scene."""
         scenes = self._data.get("scenes", {})
         if scene_id not in scenes:
@@ -57,12 +57,12 @@ class SceneCatalog:
         raw_anchor = anchors[anchor_name]
         return Pose2D.from_anchor(raw_anchor)
 
-    def list_models(self) -> List[str]:
+    def list_models(self) -> list[str]:
         """List all physical object blueprints in the catalog."""
         return list(self._data.get("models", {}).keys())
 
     def get_model_spec(
-        self, model_id: str, object_id: str, pose: Optional[Pose2D] = None
+        self, model_id: str, object_id: str, pose: Pose2D | None = None
     ) -> ObjectSpec:
         """
         Builds a typed ObjectSpec from catalog blueprints, ensuring exact physical dimensions and mass.

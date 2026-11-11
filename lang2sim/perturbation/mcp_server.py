@@ -17,7 +17,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from fastmcp import FastMCP
 

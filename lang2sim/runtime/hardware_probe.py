@@ -14,7 +14,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Literal
 
 GpuVendor = Literal["nvidia", "intel", "amd", "apple", "unknown"]
 
@@ -26,26 +26,32 @@ _PCI_VENDORS = {"0x10de": "nvidia", "0x8086": "intel", "0x1002": "amd"}
 
 @dataclass(frozen=True)
 class GpuInfo:
+    """GPU descriptor with vendor, name, and optional VRAM statistics."""
+
     vendor: GpuVendor
     name: str = ""
-    vram_total_mb: Optional[int] = None
-    vram_free_mb: Optional[int] = None
+    vram_total_mb: int | None = None
+    vram_free_mb: int | None = None
 
 
 @dataclass(frozen=True)
 class HardwareInfo:
+    """Snapshot of host hardware: CPU count, RAM, GPUs, and render-node paths."""
+
     cpu_count: int = 1
-    mem_total_mb: Optional[int] = None
-    gpus: List[GpuInfo] = field(default_factory=list)
-    dri_render_nodes: List[str] = field(default_factory=list)
+    mem_total_mb: int | None = None
+    gpus: list[GpuInfo] = field(default_factory=list)
+    dri_render_nodes: list[str] = field(default_factory=list)
     has_dxg: bool = False  # WSL2 GPU paravirtualisation (/dev/dxg)
 
     @property
-    def nvidia(self) -> Optional[GpuInfo]:
+    def nvidia(self) -> GpuInfo | None:
+        """Return the first detected NVIDIA GPU, if present."""
         return next((g for g in self.gpus if g.vendor == "nvidia"), None)
 
     @property
-    def max_vram_mb(self) -> Optional[int]:
+    def max_vram_mb(self) -> int | None:
+        """Return the largest reported GPU memory capacity in megabytes."""
         vals = [g.vram_total_mb for g in self.gpus if g.vram_total_mb is not None]
         return max(vals) if vals else None
 
@@ -55,9 +61,9 @@ class HardwareInfo:
 # ---------------------------------------------------------------------------
 
 
-def parse_nvidia_smi(csv_text: str) -> List[GpuInfo]:
+def parse_nvidia_smi(csv_text: str) -> list[GpuInfo]:
     """Parse `nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits`."""
-    gpus: List[GpuInfo] = []
+    gpus: list[GpuInfo] = []
     for line in csv_text.strip().splitlines():
         parts = [p.strip() for p in line.split(",")]
         if len(parts) < 3:
@@ -67,7 +73,7 @@ def parse_nvidia_smi(csv_text: str) -> List[GpuInfo]:
     return gpus
 
 
-def parse_meminfo(text: str) -> Optional[int]:
+def parse_meminfo(text: str) -> int | None:
     """MemTotal from /proc/meminfo, in MB."""
     for line in text.splitlines():
         if line.startswith("MemTotal:"):
@@ -77,10 +83,11 @@ def parse_meminfo(text: str) -> Optional[int]:
 
 
 def vendor_from_pci_id(vendor_id: str) -> GpuVendor:
+    """Map a PCI vendor ID hex string to a known GpuVendor literal."""
     return _PCI_VENDORS.get(vendor_id.strip().lower(), "unknown")  # type: ignore[return-value]
 
 
-def _to_int(s: str) -> Optional[int]:
+def _to_int(s: str) -> int | None:
     try:
         return int(float(s))
     except (TypeError, ValueError):
@@ -92,7 +99,7 @@ def _to_int(s: str) -> Optional[int]:
 # ---------------------------------------------------------------------------
 
 
-def _run(cmd: List[str], timeout: float = 5.0) -> Optional[str]:
+def _run(cmd: list[str], timeout: float = 5.0) -> str | None:
     if not shutil.which(cmd[0]):
         return None
     try:
@@ -102,15 +109,15 @@ def _run(cmd: List[str], timeout: float = 5.0) -> Optional[str]:
     return out.stdout if out.returncode == 0 else None
 
 
-def _probe_nvidia() -> List[GpuInfo]:
+def _probe_nvidia() -> list[GpuInfo]:
     out = _run(
         ["nvidia-smi", "--query-gpu=name,memory.total,memory.free", "--format=csv,noheader,nounits"]
     )
     return parse_nvidia_smi(out) if out else []
 
 
-def _probe_dri() -> List[GpuInfo]:
-    gpus: List[GpuInfo] = []
+def _probe_dri() -> list[GpuInfo]:
+    gpus: list[GpuInfo] = []
     for node in sorted(Path("/sys/class/drm").glob("renderD*/device/vendor")):
         try:
             vendor = vendor_from_pci_id(node.read_text())
@@ -121,7 +128,7 @@ def _probe_dri() -> List[GpuInfo]:
     return gpus
 
 
-def _probe_mem_mb() -> Optional[int]:
+def _probe_mem_mb() -> int | None:
     try:
         return parse_meminfo(Path("/proc/meminfo").read_text())
     except OSError:

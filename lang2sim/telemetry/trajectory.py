@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import csv
 import json
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -23,7 +24,7 @@ __all__ = ["Trajectory"]
 _FIELDS = ("t", "x", "y", "yaw", "v", "w")
 
 
-def _as_array(values: Optional[Iterable[float]], n: int) -> Optional[np.ndarray]:
+def _as_array(values: Iterable[float] | None, n: int) -> np.ndarray | None:
     if values is None:
         return None
     arr = np.asarray(list(values) if not isinstance(values, np.ndarray) else values, dtype=float)
@@ -51,17 +52,17 @@ class Trajectory:
     t: np.ndarray
     x: np.ndarray
     y: np.ndarray
-    yaw: Optional[np.ndarray] = None
-    v: Optional[np.ndarray] = None
-    w: Optional[np.ndarray] = None
-    goal: Optional[tuple[float, float]] = None
-    l_optimal: Optional[float] = None
+    yaw: np.ndarray | None = None
+    v: np.ndarray | None = None
+    w: np.ndarray | None = None
+    goal: tuple[float, float] | None = None
+    l_optimal: float | None = None
     collisions: int = 0
     label: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
-    slam_x: Optional[np.ndarray] = None
-    slam_y: Optional[np.ndarray] = None
-    ate: Optional[np.ndarray] = None
+    slam_x: np.ndarray | None = None
+    slam_y: np.ndarray | None = None
+    ate: np.ndarray | None = None
 
     # ------------------------------------------------------------------ init
     def __post_init__(self) -> None:
@@ -122,14 +123,17 @@ class Trajectory:
     # ------------------------------------------------------------ properties
     @property
     def ate_mean(self) -> float:
+        """Return mean absolute trajectory error, or zero when no error samples exist."""
         return float(np.mean(self.ate)) if self.ate is not None and len(self.ate) > 0 else 0.0
 
     @property
     def ate_max(self) -> float:
+        """Return maximum absolute trajectory error, or zero when unavailable."""
         return float(np.max(self.ate)) if self.ate is not None and len(self.ate) > 0 else 0.0
 
     @property
     def ate_rmse(self) -> float:
+        """Return root-mean-square trajectory error, or zero when unavailable."""
         return (
             float(np.sqrt(np.mean(self.ate**2)))
             if self.ate is not None and len(self.ate) > 0
@@ -138,10 +142,12 @@ class Trajectory:
 
     @property
     def n(self) -> int:
+        """Return the number of timestamped trajectory samples."""
         return int(self.t.shape[0])
 
     @property
     def duration(self) -> float:
+        """Return elapsed time between the first and last samples."""
         return float(self.t[-1] - self.t[0])
 
     @property
@@ -151,10 +157,12 @@ class Trajectory:
 
     @property
     def start(self) -> tuple[float, float]:
+        """Return the trajectory's initial (x, y) position."""
         return float(self.x[0]), float(self.y[0])
 
     @property
     def end(self) -> tuple[float, float]:
+        """Return the trajectory's final (x, y) position."""
         return float(self.x[-1]), float(self.y[-1])
 
     # ------------------------------------------------------------ transforms
@@ -185,12 +193,12 @@ class Trajectory:
     def from_samples(
         cls,
         samples: Sequence[Mapping[str, float]],
-        **kwargs: Any,
+        **kwargs: object,
     ) -> Trajectory:
         """Build from a list of dicts with keys ``t, x, y`` and optional ``yaw, v, w``."""
         if len(samples) < 2:
             raise ValueError("need at least 2 samples")
-        cols: dict[str, Optional[list[float]]] = {}
+        cols: dict[str, list[float] | None] = {}
         for name in _FIELDS + ("slam_x", "slam_y", "ate"):
             if all(name in s and s[name] is not None for s in samples):
                 cols[name] = [float(s[name]) for s in samples]
@@ -205,6 +213,7 @@ class Trajectory:
     from_odom_samples = from_samples
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize trajectory metadata and per-sample values to a dictionary."""
         samples = []
         for i in range(self.n):
             s = {name: float(getattr(self, name)[i]) for name in _FIELDS}
@@ -231,6 +240,7 @@ class Trajectory:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Trajectory:
+        """Build a trajectory from the dictionary representation returned by ``to_dict``."""
         goal = data.get("goal")
         return cls.from_samples(
             data["samples"],
@@ -242,6 +252,7 @@ class Trajectory:
         )
 
     def to_json(self, path: str | Path) -> Path:
+        """Write the trajectory as JSON, creating parent directories as needed."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
@@ -249,10 +260,11 @@ class Trajectory:
 
     @classmethod
     def from_json(cls, path: str | Path) -> Trajectory:
+        """Load a trajectory from a JSON file."""
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
     @classmethod
-    def from_csv(cls, path: str | Path, **kwargs: Any) -> Trajectory:
+    def from_csv(cls, path: str | Path, **kwargs: object) -> Trajectory:
         """Load a CSV with a header row containing at least ``t,x,y``."""
         with Path(path).open(newline="", encoding="utf-8") as fh:
             rows = [

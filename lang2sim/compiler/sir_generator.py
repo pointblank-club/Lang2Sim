@@ -13,7 +13,7 @@ class SIRGenerator:
     Compiles raw SimSpec declarations into validated SimulationIR graphs.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.solver = ShapelySpatialSolver()
         self.validator = SIRValidator()
 

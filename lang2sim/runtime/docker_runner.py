@@ -16,9 +16,9 @@ import importlib
 import json
 import os
 import subprocess
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Callable, Dict, List, Optional, Sequence
 
 from lang2sim.runtime.display import DisplayPlan
 
@@ -39,26 +39,30 @@ RunFn = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
 class DockerError(RuntimeError):
-    def __init__(self, message: str, stderr: str = ""):
+    """Raised when a Docker CLI command fails or returns a non-zero exit code."""
+
+    def __init__(self, message: str, stderr: str = "") -> None:
         super().__init__(message if not stderr else f"{message}: {stderr.strip()}")
         self.stderr = stderr
 
 
 @dataclass(frozen=True)
 class RunOptions:
+    """Options and bind-mount configurations for launching the simulation container."""
+
     image: str
     plan: DisplayPlan
     projects_dir: Path
-    catalog_dir: Optional[Path] = None
-    src_dir: Optional[Path] = None  # dev: bind-mount the repo over the baked-in package
-    host_uid: Optional[int] = None
-    host_gid: Optional[int] = None
+    catalog_dir: Path | None = None
+    src_dir: Path | None = None  # dev: bind-mount the repo over the baked-in package
+    host_uid: int | None = None
+    host_gid: int | None = None
     api_port: int = CONTAINER_API_PORT
     foxglove_port: int = CONTAINER_FOXGLOVE_PORT
     novnc_port: int = CONTAINER_NOVNC_PORT
-    host_env: Dict[str, str] = field(default_factory=dict)  # DISPLAY, WAYLAND_DISPLAY, XAUTHORITY
+    host_env: dict[str, str] = field(default_factory=dict)  # DISPLAY, WAYLAND_DISPLAY, XAUTHORITY
     has_dxg: bool = False
-    extra_env: Dict[str, str] = field(default_factory=dict)
+    extra_env: dict[str, str] = field(default_factory=dict)
     name: str = CONTAINER_NAME
     shm_size: str = "2g"
     command: Sequence[str] = ("serve",)
@@ -88,10 +92,10 @@ def host_to_container_path(host_path: Path, projects_dir: Path) -> str:
     return str(PurePosixPath(cfg.CONTAINER_PROJECTS_DIR, *rel.parts))
 
 
-def build_run_args(opts: RunOptions) -> List[str]:
+def build_run_args(opts: RunOptions) -> list[str]:
     """argv after `docker` for starting the sim container (detached)."""
     plan = opts.plan
-    a: List[str] = ["run", "-d", "--name", opts.name, "--label", LABEL, "--shm-size", opts.shm_size]
+    a: list[str] = ["run", "-d", "--name", opts.name, "--label", LABEL, "--shm-size", opts.shm_size]
 
     def env(k: str, v: object) -> None:
         a.extend(["-e", f"{k}={v}"])
@@ -159,9 +163,9 @@ def build_run_args(opts: RunOptions) -> List[str]:
 def default_run_options(
     plan: DisplayPlan,
     *,
-    image: Optional[str] = None,
-    project_src: Optional[Path] = None,
-    host_env: Optional[Dict[str, str]] = None,
+    image: str | None = None,
+    project_src: Path | None = None,
+    host_env: dict[str, str] | None = None,
     has_dxg: bool = False,
 ) -> RunOptions:
     """RunOptions from core.config for this user (paths, ports, uid)."""
@@ -214,7 +218,9 @@ def allow_local_x11_clients() -> bool:
 
 
 class DockerRunner:
-    def __init__(self, docker: str = "docker", run: RunFn = subprocess.run):
+    """Wrapper around the host Docker CLI managing container lifecycle and image runs."""
+
+    def __init__(self, docker: str = "docker", run: RunFn = subprocess.run) -> None:
         self.docker = docker
         self._run = run
 
@@ -222,7 +228,7 @@ class DockerRunner:
         self,
         args: Sequence[str],
         check: bool = True,
-        timeout: Optional[float] = 60,
+        timeout: float | None = 60,
     ) -> subprocess.CompletedProcess[str]:
         try:
             cp = self._run(
@@ -238,9 +244,11 @@ class DockerRunner:
 
     # images
     def image_present(self, image: str) -> bool:
+        """Check whether a Docker image is available locally."""
         return self._call(["image", "inspect", image], check=False).returncode == 0
 
     def pull(self, image: str) -> None:
+        """Pull an image from its configured Docker registry."""
         self._call(["pull", image], timeout=None)
 
     def ensure_image(self, image: str) -> bool:
@@ -251,19 +259,21 @@ class DockerRunner:
         return True
 
     # containers
-    def inspect(self, name: str = CONTAINER_NAME) -> Optional[dict]:
+    def inspect(self, name: str = CONTAINER_NAME) -> dict | None:
+        """Return Docker inspection data for a container, or ``None`` if absent."""
         cp = self._call(["container", "inspect", name], check=False)
         if cp.returncode != 0:
             return None
         data = json.loads(cp.stdout or "[]")
         return data[0] if data else None
 
-    def state(self, name: str = CONTAINER_NAME) -> Optional[dict]:
+    def state(self, name: str = CONTAINER_NAME) -> dict | None:
         """Docker's .State (Status, Running, ExitCode, Health, ...) or None if absent."""
         info = self.inspect(name)
         return info.get("State") if info else None
 
     def is_running(self, name: str = CONTAINER_NAME) -> bool:
+        """Check whether the named container is currently running."""
         st = self.state(name)
         return bool(st and st.get("Running"))
 
@@ -279,12 +289,15 @@ class DockerRunner:
         return cp.stdout.strip()
 
     def stop(self, name: str = CONTAINER_NAME, timeout: int = 10) -> None:
+        """Stop a container, allowing up to ``timeout`` seconds for shutdown."""
         self._call(["stop", "-t", str(timeout), name], check=False, timeout=timeout + 30)
 
     def remove(self, name: str = CONTAINER_NAME) -> None:
+        """Force-remove a container if it exists."""
         self._call(["rm", "-f", name], check=False)
 
     def logs(self, name: str = CONTAINER_NAME, tail: int = 200) -> str:
+        """Return the most recent container output from stdout and stderr."""
         cp = self._call(["logs", "--tail", str(tail), name], check=False)
         return (cp.stdout or "") + (cp.stderr or "")
 
@@ -292,7 +305,7 @@ class DockerRunner:
         self,
         cmd: Sequence[str],
         name: str = CONTAINER_NAME,
-        timeout: Optional[float] = 60,
+        timeout: float | None = 60,
         user: str = SIM_USER,
     ) -> subprocess.CompletedProcess[str]:
         """Run a command in the container as the sim user.

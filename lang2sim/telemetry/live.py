@@ -14,16 +14,17 @@ import json
 import os
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any
 
 DEFAULT_API = "http://127.0.0.1:9090"
 
 
-def api_base_url(base_url: Optional[str] = None) -> str:
+def api_base_url(base_url: str | None = None) -> str:
+    """Resolve the base HTTP URL of the active Lang2Sim control API."""
     return (base_url or os.environ.get("LANG2SIM_CONTROL_API") or DEFAULT_API).rstrip("/")
 
 
-def _get_json(url: str, timeout: float) -> Optional[Dict[str, Any]]:
+def _get_json(url: str, timeout: float) -> dict[str, Any] | None:
     if not url.startswith(("http://", "https://")):
         return None
     req = urllib.request.Request(url, headers={"User-Agent": "Lang2Sim-Telemetry"})  # noqa: S310
@@ -37,7 +38,7 @@ def _get_json(url: str, timeout: float) -> Optional[Dict[str, Any]]:
         return None
 
 
-def fetch_live(base_url: Optional[str] = None, timeout: float = 0.8) -> Optional[Dict[str, Any]]:
+def fetch_live(base_url: str | None = None, timeout: float = 0.8) -> dict[str, Any] | None:
     """TelemetryLive as a dict, or None when no sim/control API is reachable.
 
     Falls back to the older GET /v1/telemetry (SimStatus) on images without the
@@ -69,7 +70,7 @@ def _fmt_sim_time(t: float) -> str:
     return f"{int(m):02d}:{s:04.1f}"
 
 
-def sidebar_fields(live: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def sidebar_fields(live: dict[str, Any] | None) -> dict[str, Any]:
     """TelemetrySidebar.update_telemetry(**fields) arguments."""
     if live is None:
         return {"sim_state": "No simulation"}
@@ -93,7 +94,7 @@ def sidebar_fields(live: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def agent_view(live: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def agent_view(live: dict[str, Any] | None) -> dict[str, Any]:
     """query_robot_telemetry() result (architecture §3.5: speed, distance to goal, bumper forces)."""
     if live is None:
         return {

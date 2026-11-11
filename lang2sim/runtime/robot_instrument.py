@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 CONTACT_ROS_TOPIC = "/lang2sim/contact_states"
 CONTACT_GZ_TOPIC = "/lang2sim/contact_states"
@@ -47,6 +46,8 @@ CONTACT_HZ = 50
 
 
 class InstrumentError(ValueError):
+    """Raised when an instrumented robot model or sensor configuration cannot be generated."""
+
     pass
 
 
@@ -57,7 +58,7 @@ def default_contact_topic(
     return f"/world/{world}/model/{robot}/link/{link}/sensor/{sensor}/contact"
 
 
-def _sub(parent: ET.Element, tag: str, text: Optional[str] = None) -> ET.Element:
+def _sub(parent: ET.Element, tag: str, text: str | None = None) -> ET.Element:
     el = ET.SubElement(parent, tag)
     if text is not None:
         el.text = text
@@ -68,11 +69,11 @@ def instrument_model(
     sdf_text: str,
     *,
     link: str = CHASSIS_LINK,
-    collision: Optional[str] = None,
+    collision: str | None = None,
     contact_topic: str = CONTACT_GZ_TOPIC,
     ground_truth_topic: str = GROUND_TRUTH_TOPIC,
     base_frame: str = "base_footprint",
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Add the bumper + ground-truth publisher to a robot model SDF.
 
     Returns (new SDF text, chassis collision name used). Idempotent: an SDF that
@@ -126,7 +127,7 @@ def instrument_model(
     return out + "\n", chosen
 
 
-def telemetry_bridge_entries(world: str, robot: str) -> List[Dict[str, str]]:
+def telemetry_bridge_entries(world: str, robot: str) -> list[dict[str, str]]:
     """ros_gz_bridge config entries for the instrumented topics."""
     contact = {
         "ros_topic_name": CONTACT_ROS_TOPIC,
@@ -150,7 +151,7 @@ def telemetry_bridge_entries(world: str, robot: str) -> List[Dict[str, str]]:
     return entries
 
 
-def merge_bridge_config(stock: list, extra: List[Dict[str, str]]) -> list:
+def merge_bridge_config(stock: list, extra: list[dict[str, str]]) -> list:
     """Stock bridge entries + extra ones, skipping any (ros_topic, gz_topic) pair already present."""
     seen = {
         (e.get("ros_topic_name"), e.get("gz_topic_name"))
@@ -166,7 +167,7 @@ def merge_bridge_config(stock: list, extra: List[Dict[str, str]]) -> list:
 
 def write_instrumented(
     run_dir: Path, stock_model: Path, stock_bridge: Path, *, world: str, robot: str
-) -> Tuple[Path, Path, str]:
+) -> tuple[Path, Path, str]:
     """Write robot.l2s.sdf and bridge.l2s.yaml into run_dir. Returns (sdf, yaml, collision name)."""
     import yaml  # the sim image ships PyYAML (launch files use it); imported lazily for clarity
 

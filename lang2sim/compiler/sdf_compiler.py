@@ -17,7 +17,7 @@ class HarmonicSdfCompiler:
     SDF 1.9+ XML worlds.
     """
 
-    def __init__(self, templates_dir: Path = config.templates_dir):
+    def __init__(self, templates_dir: Path = config.templates_dir) -> None:
         self.templates_dir = templates_dir
         self.env = Environment(
             loader=FileSystemLoader(str(self.templates_dir)),

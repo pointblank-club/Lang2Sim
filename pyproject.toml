@@ -59,6 +59,7 @@ extend-exclude = ["p4_out", "_ref"]
 # Modelled on mllam/neural-lam: a moderate rule set, with larger migrations
 # deferred and tightened incrementally in follow-up PRs.
 select = ["B", "E", "F", "G", "I", "PT", "PTH", "S", "UP", "W"]
+extend-select = ["ANN", "D101", "D102", "D103"]
 ignore = [
     "E203",   # Keep Black-compatible whitespace behaviour
     "E501",   # Line length is handled by ruff format; leftovers (long strings/comments) deferred
@@ -81,16 +82,12 @@ ignore = [
     "S108",   # Allow /tmp paths for X11 sockets and container mounts
     "S110",   # Allow try-except-pass in teardown, UI unmount, and fallback handlers
     "S314",   # Internal SDF/XML element tree parsing
-    "UP006",  # Typing modernisation deferred to follow-up cleanup
-    "UP007",  # Typing modernisation deferred to follow-up cleanup
-    "UP035",  # Deprecated import migration deferred to follow-up cleanup
-    "UP045",  # Optional/Union modernisation deferred to follow-up cleanup
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "E402"]
-"scripts/**" = ["E402"]
-"tests/**" = ["S108", "PT027"]
+"scripts/**" = ["E402", "ANN", "D101", "D102", "D103"]
+"tests/**" = ["S108", "PT027", "ANN", "D101", "D102", "D103"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["lang2sim", "tests"]

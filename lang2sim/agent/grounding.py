@@ -11,7 +11,7 @@ fetch is short and failure just means "no simulation context".
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from lang2sim.telemetry.live import _get_json, api_base_url
 
@@ -23,11 +23,11 @@ NQI_FORMULA = (
 )
 
 
-def _n(v: Any, d: int = 2, unit: str = "") -> str:
+def _n(v: int | float | str | None, d: int = 2, unit: str = "") -> str:
     return "n/a" if v is None else f"{float(v):.{d}f}{unit}"
 
 
-def _run_line(name: str, r: Dict[str, Any]) -> str:
+def _run_line(name: str, r: dict[str, Any]) -> str:
     mission = {1: "succeeded", 0: "failed"}.get(r.get("S_mission"), r.get("nav_status") or "n/a")
     terms = r.get("terms") or {}
     return (
@@ -41,12 +41,12 @@ def _run_line(name: str, r: Dict[str, Any]) -> str:
 
 
 def format_context(
-    health: Optional[Dict[str, Any]],
-    live: Optional[Dict[str, Any]],
-    nav: Optional[Dict[str, Any]],
-    run: Optional[Dict[str, Any]],
-    report: Optional[Dict[str, Any]],
-) -> Optional[str]:
+    health: dict[str, Any] | None,
+    live: dict[str, Any] | None,
+    nav: dict[str, Any] | None,
+    run: dict[str, Any] | None,
+    report: dict[str, Any] | None,
+) -> str | None:
     """The system message text, or None when no simulation answered."""
     if health is None and live is None:
         return None
@@ -55,7 +55,7 @@ def format_context(
         if (health or {}).get("mode") == "replay" or (run or {}).get("mode") == "replay"
         else "LIVE simulation"
     )
-    lines: List[str] = [
+    lines: list[str] = [
         f"Lang2Sim simulation context ({mode}; measured data from the control API, not guesses)."
     ]
     if run and run.get("loaded"):
@@ -145,7 +145,7 @@ def format_context(
     return "\n".join(lines)
 
 
-def fetch_context(base_url: Optional[str] = None, timeout: float = 0.6) -> Optional[str]:
+def fetch_context(base_url: str | None = None, timeout: float = 0.6) -> str | None:
     """Blocking (call from a thread): gather the context from the control API, or None."""
     base = api_base_url(base_url)
     health = _get_json(f"{base}/v1/health", timeout)
@@ -158,7 +158,7 @@ def fetch_context(base_url: Optional[str] = None, timeout: float = 0.6) -> Optio
     return format_context(health, live, nav, run, report)
 
 
-def with_context(history: List[Dict[str, str]], context: Optional[str]) -> List[Dict[str, str]]:
+def with_context(history: list[dict[str, str]], context: str | None) -> list[dict[str, str]]:
     """A copy of the chat history with the context as a system message just before the latest user turn."""
     if not context:
         return list(history)

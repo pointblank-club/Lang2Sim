@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -22,22 +22,22 @@ router = APIRouter(prefix="/world", tags=["world_mutation"])
 # Ground footprint of each spawnable model (sdf_snippets.py): ("box", size_x, size_y) or
 # ("circle", radius). Spawned entities are not in the zero-SLAM map.pgm, so the telemetry
 # engine needs their position, shape and size to compute the minimum obstacle clearance C_min.
-SPAWN_FOOTPRINTS: Dict[str, tuple] = {
+SPAWN_FOOTPRINTS: dict[str, tuple] = {
     "wooden_crate": ("box", 0.6, 0.6),
     "cargo_box": ("box", 1.0, 0.6),
     "barrel": ("circle", 0.3),
 }
 # Bounding radius of each footprint (kept for consumers that only handle circles).
-SPAWN_FOOTPRINT_RADIUS: Dict[str, float] = {
+SPAWN_FOOTPRINT_RADIUS: dict[str, float] = {
     k: (math.hypot(v[1] / 2, v[2] / 2) if v[0] == "box" else v[1])
     for k, v in SPAWN_FOOTPRINTS.items()
 }
-_SPAWN_LOG: List[Dict[str, Any]] = []
+_SPAWN_LOG: list[dict[str, Any]] = []
 _SPAWN_LOCK = threading.Lock()
-_SPAWN_FILE: Dict[str, Any] = {"path": None}  # <run>/logs/spawns.jsonl, set per run by the server
+_SPAWN_FILE: dict[str, Any] = {"path": None}  # <run>/logs/spawns.jsonl, set per run by the server
 
 
-def set_spawn_log_file(path: Optional[str]) -> None:
+def set_spawn_log_file(path: str | None) -> None:
     """Also append every spawn to this JSON-lines file (survives an API crash mid-run).
 
     Marks the start of a sim session in the file: entities logged before the marker
@@ -53,7 +53,8 @@ def set_spawn_log_file(path: Optional[str]) -> None:
             pass
 
 
-def record_spawn(name: str, model: str, x: float, y: float, yaw: float = 0.0) -> Dict[str, Any]:
+def record_spawn(name: str, model: str, x: float, y: float, yaw: float = 0.0) -> dict[str, Any]:
+    """Record an entity spawn event in the in-memory log and persistent spawns file."""
     shape = SPAWN_FOOTPRINTS.get(model, SPAWN_FOOTPRINTS["wooden_crate"])
     entry = {
         "name": name,
@@ -79,42 +80,51 @@ def record_spawn(name: str, model: str, x: float, y: float, yaw: float = 0.0) ->
     return entry
 
 
-def spawned_since(wall_time: float) -> List[Dict[str, Any]]:
+def spawned_since(wall_time: float) -> list[dict[str, Any]]:
     """Entities spawned at or after `wall_time` (e.g. during a telemetry recording)."""
     with _SPAWN_LOCK:
         return [dict(e) for e in _SPAWN_LOG if e["wall_time"] >= wall_time]
 
 
 def clear_spawn_log() -> None:
+    """Clear all recorded spawned entities from memory."""
     with _SPAWN_LOCK:
         _SPAWN_LOG.clear()
 
 
 class SpawnRequest(BaseModel):
+    """Payload to spawn an obstacle or object dynamically into the simulation."""
+
     model_name: str = Field("wooden_crate", description="Asset type to spawn")
     x: float = Field(2.0, description="X coordinate in meters")
     y: float = Field(0.0, description="Y coordinate in meters")
     z: float = Field(0.5, description="Z coordinate in meters")
     yaw: float = Field(0.0, description="Heading rotation in radians")
-    linear_velocity: Optional[List[float]] = Field(None, description="Initial [vx, vy, vz]")
-    angular_velocity: Optional[List[float]] = Field(None, description="Initial [wx, wy, wz]")
-    entity_name: Optional[str] = Field(None, description="Optional custom entity name")
+    linear_velocity: list[float] | None = Field(None, description="Initial [vx, vy, vz]")
+    angular_velocity: list[float] | None = Field(None, description="Initial [wx, wy, wz]")
+    entity_name: str | None = Field(None, description="Optional custom entity name")
 
 
 class LightRequest(BaseModel):
+    """Payload to perturb simulation lighting and ambient reflectance."""
+
     diffuse: float = Field(0.5, ge=0.0, le=1.0, description="Sun diffuse reflectance")
     specular: float = Field(0.1, ge=0.0, le=1.0, description="Sun specular reflectance")
-    intensity: Optional[float] = Field(
+    intensity: float | None = Field(
         None, ge=0.0, le=1.0, description="Overall luminance multiplier"
     )
     light_name: str = Field("sun", description="Target light entity")
 
 
 class ResetRequest(BaseModel):
+    """Payload to reset simulation physics or robot pose."""
+
     mode: str = Field("world", description="Reset scope ('world' or 'robot')")
 
 
 class ChassisPerturbationRequest(BaseModel):
+    """Payload to apply external forces or velocity disturbances to the robot chassis."""
+
     force_x: float = Field(10.0, description="X impulse force / velocity bias")
     force_y: float = Field(0.0, description="Y impulse force / velocity bias")
     force_z: float = Field(0.0, description="Z angular impulse / yaw velocity bias")
@@ -124,6 +134,7 @@ class ChassisPerturbationRequest(BaseModel):
 
 @router.post("/spawn")
 async def spawn_entity(req: SpawnRequest) -> dict[str, Any]:
+    """Spawn an entity into the Gazebo simulation and record its footprint."""
     bridge: GazeboBridge = get_bridge()
     res = await bridge.spawn_entity(
         req.model_name,
@@ -141,6 +152,7 @@ async def spawn_entity(req: SpawnRequest) -> dict[str, Any]:
 
 @router.post("/light")
 async def set_light(req: LightRequest) -> dict[str, Any]:
+    """Adjust ambient or sunlight luminance in Gazebo."""
     bridge: GazeboBridge = get_bridge()
     lum = req.intensity if req.intensity is not None else req.diffuse
     res = await bridge.set_light(lum)
@@ -150,7 +162,8 @@ async def set_light(req: LightRequest) -> dict[str, Any]:
 
 
 @router.post("/reset")
-async def reset_world(req: Optional[ResetRequest] = None) -> dict[str, Any]:
+async def reset_world(req: ResetRequest | None = None) -> dict[str, Any]:
+    """Reset the Gazebo simulation world or robot pose."""
     bridge: GazeboBridge = get_bridge()
     mode = req.mode if req and req.mode else "world"
     res = await bridge.reset(mode)
@@ -161,6 +174,7 @@ async def reset_world(req: Optional[ResetRequest] = None) -> dict[str, Any]:
 
 @router.post("/chassis")
 async def apply_chassis(req: ChassisPerturbationRequest) -> dict[str, Any]:
+    """Apply an impulse force or twist disturbance to the robot chassis."""
     bridge: GazeboBridge = get_bridge()
     res = await bridge.apply_perturbation(
         Pose2D(x=req.force_x, y=req.force_y, yaw=req.force_z),
@@ -173,6 +187,7 @@ async def apply_chassis(req: ChassisPerturbationRequest) -> dict[str, Any]:
 
 @router.get("/health")
 def world_health() -> dict[str, Any]:
+    """Report health and connection status of the Gazebo perturbation bridge."""
     bridge: GazeboBridge = get_bridge()
     h = bridge.health()
     h["ok"] = h.get("status") in ("ready", "healthy", "ok")
@@ -181,6 +196,7 @@ def world_health() -> dict[str, Any]:
 
 @router.get("/entities")
 def list_entities() -> dict[str, Any]:
+    """List all entities dynamically spawned into the world."""
     bridge: GazeboBridge = get_bridge()
     entities = bridge.list_spawned_entities()
     return {"backend": type(bridge).__name__, "count": len(entities), "entities": entities}

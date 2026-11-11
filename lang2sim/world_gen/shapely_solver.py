@@ -4,7 +4,6 @@ File: lang2sim/world_gen/shapely_solver.py
 """
 
 import math
-from typing import List, Optional, Tuple
 
 from shapely import affinity
 from shapely.geometry import Point, Polygon, box
@@ -34,7 +33,7 @@ class ShapelySpatialSolver:
         min_corridor_width: float = MIN_AISLE_CORRIDOR_WIDTH,
         wall_standoff: float = MIN_WALL_STANDOFF,
         robot_radius: float = ROBOT_CIRCUMSCRIBED_RADIUS,
-    ):
+    ) -> None:
         self.min_corridor_width = min_corridor_width
         self.wall_standoff = wall_standoff
         self.robot_radius = robot_radius
@@ -64,9 +63,9 @@ class ShapelySpatialSolver:
     def is_valid_placement(
         self,
         candidate_poly: Polygon,
-        placed_polygons: List[Polygon],
+        placed_polygons: list[Polygon],
         room_poly: Polygon,
-        reserved_points: Optional[List[Point]] = None,
+        reserved_points: list[Point] | None = None,
         enforce_corridor: bool = True,
     ) -> bool:
         """
@@ -110,27 +109,27 @@ class ShapelySpatialSolver:
     def solve_layout(
         self,
         environment: EnvironmentSpec,
-        objects: List[ObjectSpec],
-        spawn_pose: Optional[Pose2D] = None,
-        goal_pose: Optional[Pose2D] = None,
-    ) -> Tuple[List[ObjectSpec], List[AisleCorridor]]:
+        objects: list[ObjectSpec],
+        spawn_pose: Pose2D | None = None,
+        goal_pose: Pose2D | None = None,
+    ) -> tuple[list[ObjectSpec], list[AisleCorridor]]:
         """
         Solves placement for a list of objects in the given environment.
         Preserves specified poses if collision-free, otherwise packs them
         in structured rows ensuring >= 2.2m navigation corridors.
         """
         room_poly = self.create_room_polygon(environment.room_dimensions)
-        placed_specs: List[ObjectSpec] = []
-        placed_polygons: List[Polygon] = []
+        placed_specs: list[ObjectSpec] = []
+        placed_polygons: list[Polygon] = []
 
-        reserved_points: List[Point] = []
+        reserved_points: list[Point] = []
         if spawn_pose:
             reserved_points.append(Point(spawn_pose.x, spawn_pose.y))
         if goal_pose:
             reserved_points.append(Point(goal_pose.x, goal_pose.y))
 
         # Separate items with predetermined valid poses vs unplaced items
-        unplaced_items: List[ObjectSpec] = []
+        unplaced_items: list[ObjectSpec] = []
 
         for obj in objects:
             candidate_poly = self.create_obb(
@@ -242,7 +241,7 @@ class ShapelySpatialSolver:
                         break
 
         # Calculate verified main navigation corridors
-        corridors: List[AisleCorridor] = []
+        corridors: list[AisleCorridor] = []
         half_w_corr = environment.room_dimensions.x / 2.0 - 1.0
         corridors.append(
             AisleCorridor(
@@ -258,10 +257,10 @@ class ShapelySpatialSolver:
 
 def solve_spatial_layout(
     environment: EnvironmentSpec,
-    objects: List[ObjectSpec],
-    spawn_pose: Optional[Pose2D] = None,
-    goal_pose: Optional[Pose2D] = None,
-) -> Tuple[List[ObjectSpec], List[AisleCorridor]]:
+    objects: list[ObjectSpec],
+    spawn_pose: Pose2D | None = None,
+    goal_pose: Pose2D | None = None,
+) -> tuple[list[ObjectSpec], list[AisleCorridor]]:
     """Convenience wrapper for the Shapely spatial solver."""
     solver = ShapelySpatialSolver()
     return solver.solve_layout(environment, objects, spawn_pose, goal_pose)

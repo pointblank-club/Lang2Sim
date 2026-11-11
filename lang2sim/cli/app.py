@@ -156,6 +156,7 @@ class Lang2SimApp(App):
         self.switch_screen(WorkspaceScreen(session_id=None))
 
     def on_session_selected(self, session_id: str | None) -> None:
+        """Open the selected session in the current or a new workspace screen."""
         if not session_id:
             return
         from .screens.workspace_screen import WorkspaceScreen
@@ -166,6 +167,7 @@ class Lang2SimApp(App):
             self.switch_screen(WorkspaceScreen(session_id=session_id))
 
     def on_command_palette_result(self, result: str | None) -> None:
+        """Dispatch the selected palette action or show its status notification."""
         if not result:
             return
         if result in ("switch_session", "switch_session_all"):
@@ -184,7 +186,7 @@ class Lang2SimApp(App):
             self.notify("Emergency world reset dispatched", title="Simulation")
 
 
-def main():
+def main() -> None:
     """Console script entrypoint: lang2sim."""
     app = Lang2SimApp()
     app.run()

@@ -19,7 +19,7 @@ import os
 import shutil
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from lang2sim.perturbation._compat import Pose2D
 from lang2sim.perturbation.sdf_snippets import get_inline_sdf
@@ -50,6 +50,7 @@ class BridgeResult:
     data: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the bridge result, omitting raw stdout and stderr."""
         return {
             "ok": self.ok,
             "backend": self.backend,
@@ -64,7 +65,7 @@ class BridgeResult:
 class GazeboBridge(abc.ABC):
     """Abstract Base Class for simulator dynamic mutation dispatchers."""
 
-    def __init__(self, world_name: Optional[str] = None, exec_prefix: Optional[str] = None) -> None:
+    def __init__(self, world_name: str | None = None, exec_prefix: str | None = None) -> None:
         self.world_name = world_name or os.environ.get("LANG2SIM_WORLD_NAME") or "default"
         self.exec_prefix = (
             exec_prefix
@@ -80,13 +81,13 @@ class GazeboBridge(abc.ABC):
         self,
         model_name: str,
         pose: Pose2D,
-        entity_name: Optional[str] = None,
+        entity_name: str | None = None,
     ) -> BridgeResult:
         """Spawn a dynamic obstacle into the live simulation."""
         ...
 
     @abc.abstractmethod
-    async def set_light(self, luminance: float, light_name: Optional[str] = None) -> BridgeResult:
+    async def set_light(self, luminance: float, light_name: str | None = None) -> BridgeResult:
         """Dynamically alter ambient/sun lighting luminance (0.0 to 1.0)."""
         ...
 
@@ -108,9 +109,10 @@ class GazeboBridge(abc.ABC):
         ...
 
     def list_spawned_entities(self) -> list[str]:
+        """Return a copy of entity names successfully registered by this bridge."""
         return list(self.spawned_entities)
 
-    def _next_entity_name(self, model_name: str, requested_name: Optional[str]) -> str:
+    def _next_entity_name(self, model_name: str, requested_name: str | None) -> str:
         if requested_name:
             return requested_name
         self.spawn_counter += 1
@@ -123,8 +125,8 @@ class DryRunBridge(GazeboBridge):
 
     def __init__(
         self,
-        world_name: Optional[str] = None,
-        exec_prefix: Optional[str] = None,
+        world_name: str | None = None,
+        exec_prefix: str | None = None,
         simulated_target: str = "harmonic",
     ) -> None:
         super().__init__(world_name, exec_prefix)
@@ -134,8 +136,9 @@ class DryRunBridge(GazeboBridge):
         self,
         model_name: str,
         pose: Pose2D,
-        entity_name: Optional[str] = None,
+        entity_name: str | None = None,
     ) -> BridgeResult:
+        """Record a simulated spawn and return the backend command without executing it."""
         t0 = time.perf_counter()
         name = self._next_entity_name(model_name, entity_name)
         self.spawned_entities.append(name)
@@ -165,7 +168,8 @@ class DryRunBridge(GazeboBridge):
             data={"entity_name": name, "model_name": model_name, "pose": pose.model_dump()},
         )
 
-    async def set_light(self, luminance: float, light_name: Optional[str] = None) -> BridgeResult:
+    async def set_light(self, luminance: float, light_name: str | None = None) -> BridgeResult:
+        """Validate and simulate a lighting change for the selected backend."""
         t0 = time.perf_counter()
         if not (0.0 <= luminance <= 1.0):
             return BridgeResult(
@@ -201,6 +205,7 @@ class DryRunBridge(GazeboBridge):
         )
 
     async def reset(self, mode: str = "world") -> BridgeResult:
+        """Simulate a world or model reset and return the command that would run."""
         t0 = time.perf_counter()
         if self.simulated_target == "harmonic":
             cmd = (
@@ -225,6 +230,7 @@ class DryRunBridge(GazeboBridge):
     async def apply_perturbation(
         self, velocity_bias: Pose2D, duration_s: float = 1.0
     ) -> BridgeResult:
+        """Simulate a chassis velocity perturbation without contacting a robot."""
         t0 = time.perf_counter()
         robot = os.environ.get("LANG2SIM_ROBOT_NAME") or "turtlebot3_waffle"
         cmd = (
@@ -248,6 +254,7 @@ class DryRunBridge(GazeboBridge):
         )
 
     def health(self) -> dict[str, Any]:
+        """Report simulated backend, world, entity count, and lighting state."""
         return {
             "status": "ready",
             "backend": f"dryrun ({self.simulated_target})",
@@ -296,8 +303,9 @@ class HarmonicBridge(GazeboBridge):
         self,
         model_name: str,
         pose: Pose2D,
-        entity_name: Optional[str] = None,
+        entity_name: str | None = None,
     ) -> BridgeResult:
+        """Spawn an SDF entity in Gazebo Harmonic through its create service."""
         t0 = time.perf_counter()
         name = self._next_entity_name(model_name, entity_name)
 
@@ -332,7 +340,8 @@ class HarmonicBridge(GazeboBridge):
             data={"entity_name": name, "model_name": model_name, "pose": pose.model_dump()},
         )
 
-    async def set_light(self, luminance: float, light_name: Optional[str] = None) -> BridgeResult:
+    async def set_light(self, luminance: float, light_name: str | None = None) -> BridgeResult:
+        """Set Harmonic light luminance in the inclusive range from zero to one."""
         t0 = time.perf_counter()
         if not (0.0 <= luminance <= 1.0):
             return BridgeResult(
@@ -363,6 +372,7 @@ class HarmonicBridge(GazeboBridge):
         )
 
     async def reset(self, mode: str = "world") -> BridgeResult:
+        """Reset the Harmonic world or models through the world-control service."""
         t0 = time.perf_counter()
         req = "reset: {all: true}" if mode == "world" else "reset: {model_only: true}"
         cmd = f'{self.exec_prefix} gz service -s /world/{self.world_name}/control --reqtype gz.msgs.WorldControl {GZ_REPLY} --req "{req}"'.strip()
@@ -384,6 +394,7 @@ class HarmonicBridge(GazeboBridge):
     async def apply_perturbation(
         self, velocity_bias: Pose2D, duration_s: float = 1.0
     ) -> BridgeResult:
+        """Publish a one-shot velocity command to perturb the robot in Harmonic."""
         t0 = time.perf_counter()
         cmd = (
             f"{self.exec_prefix} ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "
@@ -404,6 +415,7 @@ class HarmonicBridge(GazeboBridge):
         )
 
     def health(self) -> dict[str, Any]:
+        """Report Harmonic backend configuration and current mutation state."""
         return {
             "status": "ready",
             "backend": "harmonic",
@@ -422,8 +434,9 @@ class ClassicBridge(GazeboBridge):
         self,
         model_name: str,
         pose: Pose2D,
-        entity_name: Optional[str] = None,
+        entity_name: str | None = None,
     ) -> BridgeResult:
+        """Spawn an SDF entity in Gazebo Classic through the ROS spawn service."""
         t0 = time.perf_counter()
         name = self._next_entity_name(model_name, entity_name)
         sdf_data = get_inline_sdf(model_name, name)
@@ -451,7 +464,8 @@ class ClassicBridge(GazeboBridge):
             data={"entity_name": name, "model_name": model_name, "pose": pose.model_dump()},
         )
 
-    async def set_light(self, luminance: float, light_name: Optional[str] = None) -> BridgeResult:
+    async def set_light(self, luminance: float, light_name: str | None = None) -> BridgeResult:
+        """Set Classic light properties, rejecting luminance outside zero to one."""
         t0 = time.perf_counter()
         if not (0.0 <= luminance <= 1.0):
             return BridgeResult(
@@ -479,6 +493,7 @@ class ClassicBridge(GazeboBridge):
         )
 
     async def reset(self, mode: str = "world") -> BridgeResult:
+        """Reset the Gazebo Classic world through its ROS reset service."""
         t0 = time.perf_counter()
         cmd = f"{self.exec_prefix} ros2 service call /reset_world std_srvs/srv/Empty '{{}}'".strip()
         rc, out, err = await _run_command(cmd)
@@ -498,6 +513,7 @@ class ClassicBridge(GazeboBridge):
     async def apply_perturbation(
         self, velocity_bias: Pose2D, duration_s: float = 1.0
     ) -> BridgeResult:
+        """Publish a one-shot velocity command to perturb the Classic robot."""
         t0 = time.perf_counter()
         cmd = (
             f"{self.exec_prefix} ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "
@@ -518,6 +534,7 @@ class ClassicBridge(GazeboBridge):
         )
 
     def health(self) -> dict[str, Any]:
+        """Report Classic backend, world, spawned entity count, and lighting state."""
         return {
             "status": "ready",
             "backend": "classic",
@@ -528,10 +545,10 @@ class ClassicBridge(GazeboBridge):
 
 
 # --------------------------------------------------------------------------- Bridge Factory
-_GLOBAL_BRIDGE: Optional[GazeboBridge] = None
+_GLOBAL_BRIDGE: GazeboBridge | None = None
 
 
-def get_bridge(backend: Optional[str] = None) -> GazeboBridge:
+def get_bridge(backend: str | None = None) -> GazeboBridge:
     """Return cached singleton mutation bridge with automatic backend detection."""
     global _GLOBAL_BRIDGE
     if _GLOBAL_BRIDGE is not None and backend is None:

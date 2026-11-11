@@ -5,8 +5,9 @@ File: lang2sim/agent/nemotron_client.py
 
 import base64
 import os
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any
 
 from openai import AsyncOpenAI
 
@@ -46,10 +47,10 @@ class NemotronClient:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        model: Optional[str] = None,
-    ):
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+    ) -> None:
         _load_env_if_present()
         self.api_key = (
             api_key
@@ -76,10 +77,11 @@ class NemotronClient:
         else:
             self.model = DEFAULT_NEMOTRON_MODEL
 
-        self._client: Optional[AsyncOpenAI] = None
+        self._client: AsyncOpenAI | None = None
 
     @property
     def client(self) -> AsyncOpenAI:
+        """Return the initialized API client, creating it on first access."""
         if self._client is None:
             if not self.api_key:
                 raise ValueError(
@@ -89,16 +91,17 @@ class NemotronClient:
         return self._client
 
     def is_configured(self) -> bool:
+        """Report whether an API key is available for requests."""
         return bool(self.api_key)
 
     async def stream_chat(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.2,
     ) -> AsyncGenerator[str, None]:
         """Streams response tokens from Nemotron 3 Ultra 550B with low latency."""
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "temperature": temperature,

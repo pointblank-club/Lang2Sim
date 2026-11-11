@@ -23,10 +23,15 @@ import json
 import math
 import os
 import sys
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from rich.console import Console
+    from rich.table import Table
 
 import numpy as np
 
@@ -73,7 +78,7 @@ class NQIParams:
     # Chassis rectangle (x_min, x_max, y_min, y_max) in the robot base frame, metres. When set,
     # C_min is measured from this oriented rectangle ("robot chassis boundary", architecture §7.3)
     # instead of a circle of r_robot, which over-reports near-misses along the robot's sides.
-    footprint: Optional[tuple] = None
+    footprint: tuple | None = None
     resample_dt: float = 0.05  # s, uniform grid used for differentiation
     smooth_window: int = 5  # samples, moving-average window before differentiating
 
@@ -115,18 +120,21 @@ class OccupancyGrid:
 
     # world <-> grid (row, col)
     def world_to_cell(self, x: float, y: float) -> tuple[int, int]:
+        """Convert world coordinates to an occupancy-grid (row, column)."""
         h = self.occupied.shape[0]
         col = int(math.floor((x - self.origin[0]) / self.resolution))
         row_from_bottom = int(math.floor((y - self.origin[1]) / self.resolution))
         return h - 1 - row_from_bottom, col
 
     def cell_to_world(self, row: int, col: int) -> tuple[float, float]:
+        """Return the world coordinates at the center of an occupancy-grid cell."""
         h = self.occupied.shape[0]
         x = self.origin[0] + (col + 0.5) * self.resolution
         y = self.origin[1] + (h - 1 - row + 0.5) * self.resolution
         return x, y
 
     def in_bounds(self, row: int, col: int) -> bool:
+        """Check whether a row and column identify a cell in the grid."""
         h, w = self.occupied.shape
         return 0 <= row < h and 0 <= col < w
 
@@ -157,7 +165,7 @@ def path_length(traj: Trajectory) -> float:
 
 def _astar_length(
     grid: np.ndarray, start: tuple[int, int], goal: tuple[int, int], res: float
-) -> Optional[float]:
+) -> float | None:
     """8-connected A* on a boolean blocked-grid; returns path length in meters or None."""
     h, w = grid.shape
     if not (0 <= start[0] < h and 0 <= start[1] < w and 0 <= goal[0] < h and 0 <= goal[1] < w):
@@ -207,7 +215,7 @@ def _astar_length(
 def optimal_length(
     start: Sequence[float],
     goal: Sequence[float],
-    occupancy: Optional[OccupancyGrid] = None,
+    occupancy: OccupancyGrid | None = None,
     r_robot: float = NQIParams.r_robot,
 ) -> tuple[float, str]:
     """Shortest collision-free path length and the method used.
@@ -258,7 +266,7 @@ def trajectory_smoothness(traj: Trajectory, params: NQIParams = NQIParams()) -> 
     return float(_trapezoid(integrand, t))
 
 
-def _normalize_obstacles(obstacles: Optional[Iterable[Any]]) -> np.ndarray:
+def _normalize_obstacles(obstacles: Iterable[Any] | None) -> np.ndarray:
     """Accept ``[(x, y, r)]``, ``[(x, y)]`` or ``[{"x":..,"y":..,"r":..}]`` -> (M, 3) array."""
     rows: list[tuple[float, float, float]] = []
     for ob in obstacles or []:
@@ -298,8 +306,8 @@ def _grid_points(grid: OccupancyGrid) -> np.ndarray:
 def clearance_series(
     traj: Trajectory,
     footprint: Sequence[float],
-    obstacles: Optional[Iterable[Any]] = None,
-    occupancy: Optional[OccupancyGrid] = None,
+    obstacles: Iterable[Any] | None = None,
+    occupancy: OccupancyGrid | None = None,
     search_m: float = 2.0,
 ) -> np.ndarray:
     """Per-sample distance between the robot's chassis rectangle and the nearest obstacle boundary.
@@ -336,10 +344,10 @@ def clearance_series(
 def footprint_clearance(
     traj: Trajectory,
     footprint: Sequence[float],
-    obstacles: Optional[Iterable[Any]] = None,
-    occupancy: Optional[OccupancyGrid] = None,
+    obstacles: Iterable[Any] | None = None,
+    occupancy: OccupancyGrid | None = None,
     search_m: float = 2.0,
-) -> Optional[float]:
+) -> float | None:
     """Minimum of clearance_series: chassis rectangle to nearest obstacle over the run.
     ``None`` when there is no obstacle information (or none within reach)."""
     series = clearance_series(traj, footprint, obstacles, occupancy, search_m)
@@ -350,11 +358,11 @@ def footprint_clearance(
 
 def min_clearance(
     traj: Trajectory,
-    obstacles: Optional[Iterable[Any]] = None,
-    occupancy: Optional[OccupancyGrid] = None,
+    obstacles: Iterable[Any] | None = None,
+    occupancy: OccupancyGrid | None = None,
     r_robot: float = NQIParams.r_robot,
-    footprint: Optional[Sequence[float]] = None,
-) -> Optional[float]:
+    footprint: Sequence[float] | None = None,
+) -> float | None:
     """Minimum distance between the robot boundary and any obstacle boundary.
 
     The robot is a circle of ``r_robot`` unless ``footprint`` (chassis rectangle) is given.
@@ -380,10 +388,10 @@ def min_clearance(
 
 def mission_success(
     final_pos: Sequence[float],
-    goal: Optional[Sequence[float]],
+    goal: Sequence[float] | None,
     collisions: int,
     eps_pos: float = NQIParams.eps_pos,
-) -> Optional[int]:
+) -> int | None:
     """1 if the goal was reached within ``eps_pos`` with zero collisions; ``None`` if no goal."""
     if goal is None:
         return None
@@ -394,7 +402,7 @@ def mission_success(
 def compute_nqi(
     e_p: float,
     s_tau: float,
-    c_min: Optional[float],
+    c_min: float | None,
     c_force: int,
     params: NQIParams = NQIParams(),
 ) -> tuple[float, dict[str, float]]:
@@ -417,11 +425,11 @@ def compute_nqi(
 def score_trajectory(
     traj: Trajectory,
     *,
-    goal: Optional[Sequence[float]] = None,
-    obstacles: Optional[Iterable[Any]] = None,
-    occupancy: Optional[OccupancyGrid] = None,
-    l_optimal: Optional[float] = None,
-    collisions: Optional[int] = None,
+    goal: Sequence[float] | None = None,
+    obstacles: Iterable[Any] | None = None,
+    occupancy: OccupancyGrid | None = None,
+    l_optimal: float | None = None,
+    collisions: int | None = None,
     params: NQIParams = NQIParams(),
 ) -> dict[str, Any]:
     """Compute every metric for one run and return a JSON-serializable dict."""
@@ -482,9 +490,7 @@ def score_trajectory(
     }
 
 
-def _clearance_source(
-    obstacles: Optional[Iterable[Any]], occupancy: Optional[OccupancyGrid]
-) -> str:
+def _clearance_source(obstacles: Iterable[Any] | None, occupancy: OccupancyGrid | None) -> str:
     has_obs = _normalize_obstacles(obstacles).size > 0
     if has_obs and occupancy is not None:
         return "obstacles+map"
@@ -507,7 +513,7 @@ _DELTA_KEYS = {
 }
 
 
-def _pct(new: Optional[float], old: Optional[float]) -> Optional[float]:
+def _pct(new: float | None, old: float | None) -> float | None:
     if new is None or old is None or abs(old) < 1e-12:
         return None
     return round((new - old) / abs(old) * 100.0, 2)
@@ -515,12 +521,12 @@ def _pct(new: Optional[float], old: Optional[float]) -> Optional[float]:
 
 def build_report(
     nominal: Mapping[str, Any],
-    adversarial: Optional[Mapping[str, Any]] = None,
+    adversarial: Mapping[str, Any] | None = None,
     params: NQIParams = NQIParams(),
 ) -> dict[str, Any]:
     """Assemble the ``benchmark_report.json`` structure from scored runs."""
     runs: dict[str, Any] = {"nominal": dict(nominal)}
-    deltas: Optional[dict[str, Optional[float]]] = None
+    deltas: dict[str, float | None] | None = None
     if adversarial is not None:
         runs["adversarial"] = dict(adversarial)
         deltas = {k: _pct(adversarial.get(src), nominal.get(src)) for k, src in _DELTA_KEYS.items()}
@@ -536,9 +542,8 @@ def build_report(
     }
 
 
-def default_report_path(
-    project_name: str = "active_project", timestamp: Optional[str] = None
-) -> Path:
+def default_report_path(project_name: str = "active_project", timestamp: str | None = None) -> Path:
+    """Determine destination file path for benchmark_report.json."""
     run_dir = os.environ.get("LANG2SIM_RUN_DIR")
     if run_dir:
         return Path(run_dir).expanduser() / "benchmark_report.json"
@@ -553,7 +558,8 @@ def default_report_path(
         return Path(base).expanduser() / "benchmark_report.json"
 
 
-def write_report(report: Mapping[str, Any], path: Optional[str | Path] = None) -> Path:
+def write_report(report: Mapping[str, Any], path: str | Path | None = None) -> Path:
+    """Serialize the benchmark evaluation report to disk as JSON."""
     out = Path(path) if path is not None else default_report_path()
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -561,7 +567,7 @@ def write_report(report: Mapping[str, Any], path: Optional[str | Path] = None) -
 
 
 # --------------------------------------------------------------------------- rich output
-def _fmt(v: Any, unit: str = "", digits: int = 2) -> str:
+def _fmt(v: int | float | str | None, unit: str = "", digits: int = 2) -> str:
     if v is None:
         return "n/a"
     if isinstance(v, float):
@@ -569,11 +575,11 @@ def _fmt(v: Any, unit: str = "", digits: int = 2) -> str:
     return f"{v}{unit}"
 
 
-def _mission_str(s: Any) -> str:
+def _mission_str(s: int | None) -> str:
     return {1: "[green]Succeeded[/]", 0: "[red]Failed[/]"}.get(s, "n/a")
 
 
-def _delta_str(pct: Optional[float], higher_is_better: bool, note: str = "") -> str:
+def _delta_str(pct: float | None, higher_is_better: bool, note: str = "") -> str:
     if pct is None:
         return "n/a"
     good = (pct >= 0) == higher_is_better or abs(pct) < 1e-9
@@ -582,7 +588,7 @@ def _delta_str(pct: Optional[float], higher_is_better: bool, note: str = "") -> 
     return f"[{color}]{pct:+.1f}%[/]{suffix}"
 
 
-def render_comparison_table(report: Mapping[str, Any]):
+def render_comparison_table(report: Mapping[str, Any]) -> Table:
     """Build a Rich table mirroring the architecture's §8.4 benchmark table."""
     from rich.table import Table
 
@@ -683,7 +689,7 @@ def render_comparison_table(report: Mapping[str, Any]):
             _delta_str(deltas.get("ate_mean_pct"), False),
         )
 
-        def _health_str(div: Any) -> str:
+        def _health_str(div: bool | None) -> str:
             if div is None:
                 return "n/a"
             return "[red]Diverged (>0.35 m)[/]" if div else "[green]Healthy (≤0.35 m)[/]"
@@ -697,7 +703,8 @@ def render_comparison_table(report: Mapping[str, Any]):
     return table
 
 
-def render_to_console(report: Mapping[str, Any], console: Any = None) -> None:
+def render_to_console(report: Mapping[str, Any], console: Console | None = None) -> None:
+    """Print the formatted NQI benchmark comparison table to the terminal."""
     from rich.console import Console
 
     (console or Console()).print(render_comparison_table(report))
@@ -741,14 +748,14 @@ def _load_traj(path: str) -> Trajectory:
     )
 
 
-def _load_obstacles(path: Optional[str]) -> Optional[list[Any]]:
+def _load_obstacles(path: str | None) -> list[Any] | None:
     if not path:
         return None
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     return data.get("obstacles", data) if isinstance(data, dict) else data
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="python -m lang2sim.telemetry.nqi_scorer", description=__doc__.splitlines()[0]
     )

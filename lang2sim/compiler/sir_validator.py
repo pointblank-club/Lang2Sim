@@ -3,8 +3,6 @@ Simulation Intermediate Representation (SIR) Validator.
 File: lang2sim/compiler/sir_validator.py
 """
 
-from typing import List, Tuple
-
 from shapely.geometry import Point
 
 from lang2sim.core.config import (
@@ -26,7 +24,7 @@ class SIRValidator:
         min_corridor_width: float = MIN_AISLE_CORRIDOR_WIDTH,
         wall_standoff: float = MIN_WALL_STANDOFF,
         robot_radius: float = ROBOT_CIRCUMSCRIBED_RADIUS,
-    ):
+    ) -> None:
         self.min_corridor_width = min_corridor_width
         self.wall_standoff = wall_standoff
         self.robot_radius = robot_radius
@@ -36,11 +34,11 @@ class SIRValidator:
             robot_radius=robot_radius,
         )
 
-    def validate(self, sim_spec: SimSpec) -> Tuple[bool, List[str]]:
+    def validate(self, sim_spec: SimSpec) -> tuple[bool, list[str]]:
         """
         Validates geometric feasibility, bounds, non-intersection, and reachability.
         """
-        errors: List[str] = []
+        errors: list[str] = []
         env = sim_spec.environment
         room_poly = self.solver.create_room_polygon(env.room_dimensions)
 

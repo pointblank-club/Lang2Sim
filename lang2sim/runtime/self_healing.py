@@ -30,9 +30,9 @@ import re
 import subprocess
 import threading
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from lang2sim.core.models import HealEvent, NavStatus, Pose2D
 from lang2sim.runtime.ros_bridge import RosSnapshot
@@ -71,6 +71,8 @@ TF_GRACE_S = 10.0
 
 @dataclass(frozen=True)
 class Fault:
+    """Diagnosed simulation fault with categorization and evidence log snippet."""
+
     kind: str  # missing_package | missing_tf | unlinked_scan | goal_in_collision
     signature: str  # stable text used for rate limiting and the log
     evidence: str
@@ -78,16 +80,19 @@ class Fault:
 
 @dataclass
 class Observation:
-    lines: List[str]  # new log lines since the last check
-    snap: Optional[RosSnapshot]
-    alive: Dict[str, bool]  # node process name -> running
-    nav: Optional[NavStatus] = None
+    """Telemetry and process state collected during a self-healing health check."""
+
+    lines: list[str]  # new log lines since the last check
+    snap: RosSnapshot | None
+    alive: dict[str, bool]  # node process name -> running
+    nav: NavStatus | None = None
     sim_running: bool = True
     was_localized: bool = False  # robot was localized earlier in this run
 
 
-def classify(obs: Observation) -> List[Fault]:
-    faults: Dict[str, Fault] = {}
+def classify(obs: Observation) -> list[Fault]:
+    """Inspect recent logs and topic snapshots to detect actionable simulation faults."""
+    faults: dict[str, Fault] = {}
 
     def add(kind: str, sig: str, ev: str) -> None:
         faults.setdefault(f"{kind}:{sig}", Fault(kind, sig, ev))
@@ -139,12 +144,15 @@ def classify(obs: Observation) -> List[Fault]:
 
 @dataclass(frozen=True)
 class Action:
+    """Corrective action planned by the self-healer to resolve a simulation fault."""
+
     kind: str  # report | restart_node | snap_goal
     target: str = ""
-    detail: Dict[str, object] = field(default_factory=dict)
+    detail: dict[str, object] = field(default_factory=dict)
 
 
 def plan_recovery(f: Fault) -> Action:
+    """Select the optimal recovery action for a given fault."""
     if f.kind == "missing_package":
         return Action(
             "report",
@@ -174,9 +182,9 @@ def plan_recovery(f: Fault) -> Action:
 # ---------------------------------------------------------------------------
 
 
-def read_map(map_yaml: Path) -> Tuple[List[bytes], int, int, float, Tuple[float, float], float]:
+def read_map(map_yaml: Path) -> tuple[list[bytes], int, int, float, tuple[float, float], float]:
     """Parse a Nav2 map.yaml + binary PGM. Returns rows (top first), w, h, resolution, origin, free_thresh."""
-    meta: Dict[str, str] = {}
+    meta: dict[str, str] = {}
     for line in Path(map_yaml).read_text().splitlines():
         if ":" in line:
             k, v = line.split(":", 1)
@@ -211,7 +219,7 @@ def read_map(map_yaml: Path) -> Tuple[List[bytes], int, int, float, Tuple[float,
 
 def nearest_free(
     map_yaml: Path, x: float, y: float, clearance: float = 0.45, max_radius: float = 3.0
-) -> Optional[Pose2D]:
+) -> Pose2D | None:
     """Closest map point to (x, y) with every cell within `clearance` free. None if none nearby."""
     rows, w, h, res, (ox, oy), free_thresh = read_map(map_yaml)
     free_min = int((1 - free_thresh) * 255)  # brighter than this = free
@@ -252,6 +260,8 @@ def nearest_free(
 
 @dataclass
 class RateLimit:
+    """Sliding-window rate limiter for self-healing actions."""
+
     cooldown_s: float = 15.0
     max_attempts: int = 3
     window_s: float = 300.0
@@ -265,10 +275,10 @@ class SelfHealer:
         run_dir: Path,
         *,
         restart_node: Callable[[str], bool],
-        resend_goal: Optional[Callable[[Pose2D], bool]] = None,
-        current_goal: Optional[Callable[[], Optional[Pose2D]]] = None,
-        map_yaml: Optional[Path] = None,
-        limit: Optional[RateLimit] = None,
+        resend_goal: Callable[[Pose2D], bool] | None = None,
+        current_goal: Callable[[], Pose2D | None] | None = None,
+        map_yaml: Path | None = None,
+        limit: RateLimit | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.run_dir = Path(run_dir)
@@ -279,11 +289,11 @@ class SelfHealer:
         self._map = map_yaml
         self.limit = limit or RateLimit()
         self._clock = clock
-        self._history: Dict[str, List[float]] = {}
+        self._history: dict[str, list[float]] = {}
         self._reported: set = set()
-        self.events: List[dict] = []
+        self.events: list[dict] = []
 
-    def _allowed(self, sig: str) -> Tuple[bool, str]:
+    def _allowed(self, sig: str) -> tuple[bool, str]:
         now = self._clock()
         hist = [t for t in self._history.get(sig, []) if now - t <= self.limit.window_s]
         self._history[sig] = hist
@@ -293,10 +303,10 @@ class SelfHealer:
             return False, "attempt limit reached"
         return True, ""
 
-    def handle(self, faults: Iterable[Fault]) -> List[dict]:
+    def handle(self, faults: Iterable[Fault]) -> list[dict]:
         """Plan and run recoveries. Rate limits are per recovery action (e.g. 'restart_node bridge'),
         so several symptoms of one failure trigger one restart, at most once per pass."""
-        out: List[dict] = []
+        out: list[dict] = []
         done_this_pass: set = set()
         for f in faults:
             action = plan_recovery(f)
@@ -332,7 +342,7 @@ class SelfHealer:
             out.append(self._log(f, action, success, note))
         return out
 
-    def _execute(self, a: Action) -> Tuple[bool, str]:
+    def _execute(self, a: Action) -> tuple[bool, str]:
         try:
             if a.kind == "restart_node":
                 return bool(self._restart(a.target)), f"restarted {a.target}"
@@ -380,17 +390,18 @@ class NodeControl:
     def __init__(self, run_dir: Path, robot: str = "waffle") -> None:
         self.run_dir = Path(run_dir)
         self.robot = robot
-        self._procs: List[subprocess.Popen] = []
+        self._procs: list[subprocess.Popen] = []
         self._lock = threading.Lock()
 
     @staticmethod
     def _pgrep(pattern: str) -> bool:
         return subprocess.run(["pgrep", "-f", pattern], capture_output=True).returncode == 0
 
-    def alive(self) -> Dict[str, bool]:
+    def alive(self) -> dict[str, bool]:
+        """Return whether each managed ROS node process is currently present."""
         return {name: self._pgrep(f"lib/{pkg}/{exe}") for name, (pkg, exe) in NODES.items()}
 
-    def _command(self, name: str) -> List[str]:
+    def _command(self, name: str) -> list[str]:
         share = f"/opt/ros/{os.getenv('ROS_DISTRO', 'jazzy')}/share/turtlebot3_gazebo"
         model = f"turtlebot3_{self.robot}"
         if name == "robot_state_publisher":
@@ -431,6 +442,7 @@ class NodeControl:
         raise ValueError(f"no restart recipe for {name}")
 
     def restart(self, name: str) -> bool:
+        """Restart a managed node, logging output and waiting briefly for it to appear."""
         pkg, exe = NODES[name]
         subprocess.run(["pkill", "-f", f"lib/{pkg}/{exe}"], capture_output=True)
         with self._lock:
@@ -450,6 +462,7 @@ class NodeControl:
         return False
 
     def stop_all(self) -> None:
+        """Stop all node processes launched by this controller."""
         with self._lock:
             for p in self._procs:
                 if p.poll() is None:

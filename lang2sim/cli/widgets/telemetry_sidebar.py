@@ -4,8 +4,8 @@ File: lang2sim/cli/widgets/telemetry_sidebar.py
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
+from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import Static
@@ -13,6 +13,8 @@ from textual.widgets import Static
 
 @dataclass
 class TelemetryData:
+    """Current robot state and metrics displayed in the telemetry sidebar."""
+
     # Filled from GET /v1/telemetry/live (lang2sim.telemetry.live.sidebar_fields).
     sim_state: str = "No simulation"
     sim_time: str = "--:--"
@@ -20,7 +22,7 @@ class TelemetryData:
     robot_x: float = 0.0
     robot_y: float = 0.0
     speed: float = 0.0
-    clearance: Optional[float] = None
+    clearance: float | None = None
     bumper_force: float = 0.0
     collision_count: int = 0
     ate_drift_m: float = 0.0
@@ -40,11 +42,12 @@ class TelemetrySidebar(Widget):
     }
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(id="telemetry-sidebar", **kwargs)
         self.data = TelemetryData()
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
+        """Render simulation, robot, collision, and context metrics."""
         with Vertical():
             yield Static("[bold #f1f2f6]SIMULATION[/]", classes="sidebar-section-title")
             yield Static(self._format_sim_state(), id="sim-state", classes="sidebar-metric")
@@ -104,7 +107,7 @@ class TelemetrySidebar(Widget):
         spend = (self.data.tokens_used / 1_000_000.0) * 0.20
         return f"[#ced6e0]{self.data.tokens_used:,} tokens\n{self.data.context_capacity_pct}% used\n${spend:.4f} spent[/]"
 
-    def update_telemetry(self, **kwargs) -> None:
+    def update_telemetry(self, **kwargs: object) -> None:
         """Update any metric dynamically and refresh corresponding label."""
         for key, value in kwargs.items():
             if hasattr(self.data, key):

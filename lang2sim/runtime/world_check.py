@@ -21,14 +21,15 @@ from __future__ import annotations
 import os
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Literal, Optional, Sequence, Tuple
+from typing import Literal
 
 Level = Literal["error", "warning", "fixed"]
 
 # (short name, plugin filename, plugin class, extra XML inside <plugin>)
-REQUIRED_SYSTEMS: Tuple[Tuple[str, str, str, str], ...] = (
+REQUIRED_SYSTEMS: tuple[tuple[str, str, str, str], ...] = (
     ("physics", "gz-sim-physics-system", "gz::sim::systems::Physics", ""),
     ("user-commands", "gz-sim-user-commands-system", "gz::sim::systems::UserCommands", ""),
     (
@@ -53,6 +54,8 @@ NORMALIZED_NAME = "world.l2s.sdf"
 
 @dataclass(frozen=True)
 class Issue:
+    """Pre-flight validation warning or error detected in an SDF world."""
+
     level: Level
     code: str
     message: str
@@ -60,21 +63,26 @@ class Issue:
 
 @dataclass
 class WorldReport:
-    world_name: Optional[str] = None
-    sdf_version: Optional[str] = None
-    issues: List[Issue] = field(default_factory=list)
-    missing_systems: List[str] = field(default_factory=list)
-    model_uris: List[str] = field(default_factory=list)
+    """Consolidated pre-flight inspection report for an SDF world."""
+
+    world_name: str | None = None
+    sdf_version: str | None = None
+    issues: list[Issue] = field(default_factory=list)
+    missing_systems: list[str] = field(default_factory=list)
+    model_uris: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
+        """Report whether the world contains no error-level issues."""
         return not any(i.level == "error" for i in self.issues)
 
     @property
-    def errors(self) -> List[Issue]:
+    def errors(self) -> list[Issue]:
+        """Return only error-level issues from the validation report."""
         return [i for i in self.issues if i.level == "error"]
 
     def summary(self) -> str:
+        """Format the world validation result and all issues as readable text."""
         if not self.issues:
             return f"world '{self.world_name}': ok"
         lines = [f"world '{self.world_name}': {'ok' if self.ok else 'REJECTED'}"]
@@ -105,12 +113,13 @@ def _pose_ok(el: ET.Element) -> bool:
     return True
 
 
-def default_model_paths() -> List[Path]:
+def default_model_paths() -> list[Path]:
+    """Retrieve existing Gazebo model search directories from GZ_SIM_RESOURCE_PATH."""
     paths = [Path(p) for p in os.environ.get("GZ_SIM_RESOURCE_PATH", "").split(":") if p]
     return [p for p in paths if p.is_dir()]
 
 
-def check_world(sdf_text: str, model_paths: Optional[Sequence[Path]] = None) -> WorldReport:
+def check_world(sdf_text: str, model_paths: Sequence[Path] | None = None) -> WorldReport:
     """Inspect a world. `model_paths` given -> model:// URIs must resolve there."""
     r = WorldReport()
     try:
@@ -227,8 +236,8 @@ def normalize_world(sdf_text: str, missing: Iterable[str]) -> str:
 
 
 def prepare_world(
-    world_path: Path, out_dir: Optional[Path] = None, model_paths: Optional[Sequence[Path]] = None
-) -> Tuple[WorldReport, Optional[Path]]:
+    world_path: Path, out_dir: Path | None = None, model_paths: Sequence[Path] | None = None
+) -> tuple[WorldReport, Path | None]:
     """Check a world file; on success return the path Gazebo should load.
 
     That is the original file when nothing was missing, else a normalized copy

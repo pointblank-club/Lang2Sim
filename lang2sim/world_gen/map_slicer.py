@@ -9,7 +9,6 @@ in < 2 seconds, completely eliminating Cartographer / SLAM overhead.
 
 import math
 from pathlib import Path
-from typing import List, Tuple
 
 from shapely.geometry import Point
 
@@ -23,16 +22,16 @@ class ZeroSlamMapSlicer:
     into 2D occupancy grids for Nav2.
     """
 
-    def __init__(self, resolution: float = MAP_RESOLUTION):
+    def __init__(self, resolution: float = MAP_RESOLUTION) -> None:
         self.resolution = resolution  # 0.05 m/pixel
 
     def slice_and_export(
         self,
         room_dim: Vector3D,
-        objects: List[ObjectSpec],
+        objects: list[ObjectSpec],
         output_dir: Path,
         map_name: str = "map",
-    ) -> Tuple[Path, Path]:
+    ) -> tuple[Path, Path]:
         """
         Rasters the 2D floorplan and writes map.pgm + map.yaml.
         """
@@ -53,7 +52,7 @@ class ZeroSlamMapSlicer:
         # Using a flat bytearray of size rows * cols
         grid = bytearray([254] * (rows * cols))
 
-        def set_pixel(c: int, r: int, val: int):
+        def set_pixel(c: int, r: int, val: int) -> None:
             if 0 <= c < cols and 0 <= r < rows:
                 grid[r * cols + c] = val
 
@@ -118,11 +117,11 @@ free_thresh: 0.25
 
 def slice_map_from_layout(
     room_dim: Vector3D,
-    objects: List[ObjectSpec],
+    objects: list[ObjectSpec],
     output_dir: Path,
     map_name: str = "map",
     resolution: float = MAP_RESOLUTION,
-) -> Tuple[Path, Path]:
+) -> tuple[Path, Path]:
     """Convenience function to generate zero-SLAM map assets."""
     slicer = ZeroSlamMapSlicer(resolution=resolution)
     return slicer.slice_and_export(room_dim, objects, output_dir, map_name)

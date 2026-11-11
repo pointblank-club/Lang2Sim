@@ -7,9 +7,10 @@ import json
 import re
 import time
 import uuid
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from ..core.session_manager import (
     ChatSession,
@@ -85,23 +86,31 @@ Never print raw invocation phrases. Always use the ```tool ``` block. When tool 
 
 @dataclass
 class ThoughtChunk:
+    """Partial streaming chunk of the model's internal reasoning block."""
+
     chunk: str
 
 
 @dataclass
 class ThoughtCompleted:
+    """Completed reasoning block emitted by the LLM."""
+
     duration_str: str
     thought: str
 
 
 @dataclass
 class PlanCreated:
+    """High-level execution plan generated for multi-step task execution."""
+
     title: str
-    steps: List[str]
+    steps: list[str]
 
 
 @dataclass
 class PlanStepUpdated:
+    """Status update for an individual step within an execution plan."""
+
     step_index: int
     status: str
     detail: str = ""
@@ -109,14 +118,18 @@ class PlanStepUpdated:
 
 @dataclass
 class PermissionRequested:
+    """User confirmation request before executing a sensitive or modifying tool."""
+
     event_id: str
     tool_name: str
     command: str
-    arguments: Dict[str, Any]
+    arguments: dict[str, Any]
 
 
 @dataclass
 class CommandExecuted:
+    """Result of an executed terminal or container command."""
+
     event_id: str
     tool_name: str
     command: str
@@ -128,12 +141,16 @@ class CommandExecuted:
 
 @dataclass
 class ActionStarted:
+    """Event triggered immediately prior to executing an agent tool call."""
+
     tool_name: str
-    arguments: Dict[str, Any] = field(default_factory=dict)
+    arguments: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ActionCompleted:
+    """Event triggered after a tool call completes execution."""
+
     tool_name: str
     duration_str: str
     output: Any
@@ -142,15 +159,19 @@ class ActionCompleted:
 
 @dataclass
 class ContentChunk:
+    """Incremental streaming token chunk of the user-facing response."""
+
     chunk: str
 
 
 @dataclass
 class TurnCompleted:
+    """Final outcome of an agent ReAct interaction turn."""
+
     full_content: str
-    thought: Optional[str] = None
-    thought_duration_str: Optional[str] = None
-    actions: List[ToolCallRecord] = field(default_factory=list)
+    thought: str | None = None
+    thought_duration_str: str | None = None
+    actions: list[ToolCallRecord] = field(default_factory=list)
 
 
 # ── Autonomous Supervisor Class ────────────────────────────────────────
@@ -161,9 +182,9 @@ class ReActSupervisor:
 
     def __init__(
         self,
-        client: Optional[NemotronClient] = None,
+        client: NemotronClient | None = None,
         workspace_name: str = "active_project",
-    ):
+    ) -> None:
         self.client = client or NemotronClient()
         self.workspace_name = workspace_name
 
@@ -171,8 +192,8 @@ class ReActSupervisor:
         self,
         session: ChatSession,
         user_prompt: str,
-        conversation_history: List[Dict[str, str]],
-        permission_checker: Optional[Callable[[str, str, Dict[str, Any], str], Any]] = None,
+        conversation_history: list[dict[str, str]],
+        permission_checker: Callable[[str, str, dict[str, Any], str], Any] | None = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Executes an autonomous multi-turn ReAct cognitive loop:
@@ -187,11 +208,11 @@ class ReActSupervisor:
         """
         self.current_prompt = user_prompt
         MAX_TURNS = 8
-        actions_taken: List[ToolCallRecord] = []
-        full_thought_text: Optional[str] = None
-        thought_duration_str: Optional[str] = None
-        final_markdown_parts: List[str] = []
-        plan_steps: List[str] = []
+        actions_taken: list[ToolCallRecord] = []
+        full_thought_text: str | None = None
+        thought_duration_str: str | None = None
+        final_markdown_parts: list[str] = []
+        plan_steps: list[str] = []
         plan_step_idx: int = 0
         plan_emitted = False
 
@@ -203,8 +224,8 @@ class ReActSupervisor:
         thought_tag_re = re.compile(r"<thought>(.*?)(?:</thought>|$)", re.DOTALL | re.IGNORECASE)
 
         for turn_num in range(MAX_TURNS):
-            turn_thought_buffer: List[str] = []
-            turn_content_buffer: List[str] = []
+            turn_thought_buffer: list[str] = []
+            turn_content_buffer: list[str] = []
             in_thought = False
             in_plan = False
             thought_start_time = time.time()
@@ -526,7 +547,7 @@ class ReActSupervisor:
             actions=actions_taken,
         )
 
-    def _extract_tools_and_clean_text(self, text: str) -> Tuple[List[tuple], str]:
+    def _extract_tools_and_clean_text(self, text: str) -> tuple[list[tuple], str]:
         """
         Extracts both fenced and raw JSON tool calls from text and completely removes
         them from the user-facing Markdown text so raw JSON never leaks into the chat.
@@ -613,14 +634,14 @@ class ReActSupervisor:
 
         return calls, cleaned.strip()
 
-    def _extract_prompt_dimensions(self, prompt: str) -> Tuple[float, float]:
+    def _extract_prompt_dimensions(self, prompt: str) -> tuple[float, float]:
         """Dynamically extracts dimensions like '10m x 15 m', '10x15', '20 by 12' from user prompt."""
         m = re.search(r"(\d+(?:\.\d+)?)\s*m?\s*(?:x|by|\*)\s*(\d+(?:\.\d+)?)\s*m?", prompt.lower())
         if m:
             return float(m.group(1)), float(m.group(2))
         return 14.0, 10.0
 
-    def _extract_prompt_objects(self, prompt: str) -> List[Dict[str, Any]]:
+    def _extract_prompt_objects(self, prompt: str) -> list[dict[str, Any]]:
         """Dynamically extracts requested models and quantities from user prompt."""
         p = prompt.lower()
         extracted = []
@@ -657,18 +678,21 @@ class ReActSupervisor:
         return extracted
 
     def add_user_message(self, content: str) -> None:
+        """Append a user message and persist the updated conversation context."""
         if not hasattr(self, "messages"):
             self.messages = [{"role": "system", "content": SUPERVISOR_SYSTEM_PROMPT}]
         self.messages.append({"role": "user", "content": content})
         self._persist_context()
 
     def add_assistant_message(self, content: str) -> None:
+        """Append an assistant message and persist the updated conversation context."""
         if not hasattr(self, "messages"):
             self.messages = [{"role": "system", "content": SUPERVISOR_SYSTEM_PROMPT}]
         self.messages.append({"role": "assistant", "content": content})
         self._persist_context()
 
-    def run_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
+    def run_tool(self, tool_name: str, **kwargs: object) -> dict[str, Any]:
+        """Execute a registered tool and persist its result in the conversation."""
         result = execute_tool(tool_name, **kwargs)
         if not hasattr(self, "messages"):
             self.messages = [{"role": "system", "content": SUPERVISOR_SYSTEM_PROMPT}]
@@ -697,7 +721,7 @@ class ReActSupervisor:
         except Exception:
             pass
 
-    def _infer_tool_for_plan_step(self, step_text: str) -> Optional[Tuple[str, Dict[str, Any]]]:
+    def _infer_tool_for_plan_step(self, step_text: str) -> tuple[str, dict[str, Any]] | None:
         """Infers the appropriate tool and parameters for a stage in an active plan dynamically."""
         s = step_text.lower()
         p = getattr(self, "current_prompt", "").lower()
@@ -728,7 +752,7 @@ class ReActSupervisor:
             return ("query_robot_telemetry", {})
         return None
 
-    def _detect_requested_tools(self, prompt: str) -> List[tuple]:
+    def _detect_requested_tools(self, prompt: str) -> list[tuple]:
         """Detects standard robotics simulation actions and terminal commands implied by prompt."""
         p = prompt.lower().strip()
         actions = []

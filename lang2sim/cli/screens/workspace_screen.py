@@ -5,13 +5,16 @@ File: lang2sim/cli/screens/workspace_screen.py
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+from rich.console import RenderableType
 from rich.markup import escape
 from textual import events, work
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
+from textual.widget import Widget
 from textual.widgets import Markdown, Static
 
 from ...agent.nemotron_client import NemotronClient
@@ -50,19 +53,19 @@ class WorkspaceScreen(Screen):
     def __init__(
         self,
         initial_prompt: str = "",
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
         workspace_name: str = "active_project",
-        **kwargs,
-    ):
+        **kwargs: object,
+    ) -> None:
         super().__init__(**kwargs)
         self.initial_prompt = initial_prompt
         self.client = NemotronClient()
         self.workspace_name = workspace_name
         self.always_allow_commands: bool = False
-        self._pending_permissions: Dict[str, asyncio.Future] = {}
-        self._active_command_cards: Dict[str, CommandCard] = {}
-        self._active_plan_card: Optional[PlanCard] = None
-        self._selected_text: Optional[str] = None
+        self._pending_permissions: dict[str, asyncio.Future] = {}
+        self._active_command_cards: dict[str, CommandCard] = {}
+        self._active_plan_card: PlanCard | None = None
+        self._selected_text: str | None = None
 
         # Session initialization
         if session_id:
@@ -82,7 +85,7 @@ class WorkspaceScreen(Screen):
                 system_prompt=SYSTEM_PROMPT,
             )
 
-        self.conversation_history: List[Dict[str, str]] = []
+        self.conversation_history: list[dict[str, str]] = []
         for m in self.session.messages:
             if m.role == "system":
                 self.conversation_history.append({"role": "system", "content": m.content})
@@ -97,9 +100,10 @@ class WorkspaceScreen(Screen):
         self.demo = DemoRunner(
             say=self._demo_say, show=self._demo_show, progress=self._demo_progress
         )
-        self._progress_line: Optional[Static] = None
+        self._progress_line: Static | None = None
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
+        """Build the chat workspace, prompt input, and telemetry sidebar."""
         # Top title bar
         yield Static(f"S2L | {self.session.title} — lang2sim", id="workspace-header")
 
@@ -306,7 +310,8 @@ class WorkspaceScreen(Screen):
             callback=self.on_session_switched,
         )
 
-    def on_session_switched(self, session_id: Optional[str]) -> None:
+    def on_session_switched(self, session_id: str | None) -> None:
+        """Load a newly selected session when it differs from the active one."""
         if session_id and session_id != self.session.id:
             self.load_session(session_id)
 
@@ -590,17 +595,19 @@ class WorkspaceScreen(Screen):
 
     # --- demo commands ------------------------------------------------------------
     @work(exclusive=False, group="demo")
-    async def run_demo_command(self, command) -> None:
+    async def run_demo_command(self, command: str) -> None:
+        """Run a slash command and refresh telemetry after it completes."""
         await self.demo.run(command)
         self.poll_telemetry()
 
     def _demo_say(self, markup: str) -> None:
         self._mount_chat(Static(markup, classes="demo-line"))
 
-    def _demo_show(self, renderable) -> None:
+    def _demo_show(self, renderable: RenderableType) -> None:
+        """Mount a Rich renderable, such as a benchmark table, in the chat."""
         self._mount_chat(Static(renderable, classes="demo-table"))
 
-    def _demo_progress(self, markup: Optional[str]) -> None:
+    def _demo_progress(self, markup: str | None) -> None:
         """One status line updated in place (None: leave it and start a new one next time)."""
         if markup is None:
             self._progress_line = None
@@ -611,7 +618,7 @@ class WorkspaceScreen(Screen):
         else:
             self._progress_line.update(markup)
 
-    def _mount_chat(self, widget) -> None:
+    def _mount_chat(self, widget: Widget) -> None:
         try:
             chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
         except Exception:  # noqa: BLE001 - screen gone
@@ -630,7 +637,7 @@ class WorkspaceScreen(Screen):
         except Exception:  # noqa: BLE001 - app shutting down
             pass
 
-    def _apply_telemetry(self, fields: Dict[str, Any]) -> None:
+    def _apply_telemetry(self, fields: dict[str, Any]) -> None:
         try:
             self.query_one(TelemetrySidebar).update_telemetry(**fields)
         except Exception:  # noqa: BLE001 - screen not mounted any more
@@ -657,10 +664,10 @@ class WorkspaceScreen(Screen):
             return
 
         supervisor = ReActSupervisor(client=self.client, workspace_name=self.workspace_name)
-        thought_box: Optional[ThoughtBox] = None
-        thought_text_parts: List[str] = []
-        content_parts: List[str] = []
-        active_pills: Dict[str, ActionPill] = {}
+        thought_box: ThoughtBox | None = None
+        thought_text_parts: list[str] = []
+        content_parts: list[str] = []
+        active_pills: dict[str, ActionPill] = {}
 
         # Ground the answer in the running simulation (live telemetry + latest NQI report)
         from ...agent.grounding import fetch_context, with_context

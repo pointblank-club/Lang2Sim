@@ -19,9 +19,10 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 from PIL import Image
@@ -54,10 +55,11 @@ class VisionResult:
     metrics: dict[str, float] = field(default_factory=dict)
     latency_ms: float = 0.0
     message: str = ""
-    save_path: Optional[str] = None
-    fallback: Optional[str] = None
+    save_path: str | None = None
+    fallback: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize frame metadata and encoded image content for the control API."""
         return {
             "ok": self.ok,
             "stream": self.stream,
@@ -147,7 +149,7 @@ def encode_jpeg_base64(img: Image.Image, quality: int = 80, max_dimension: int =
 
 
 # --------------------------------------------------------------------------- Desktop Window Capture
-def _find_window_rect_x11(title_pattern: str) -> Optional[Tuple[int, int, int, int]]:
+def _find_window_rect_x11(title_pattern: str) -> tuple[int, int, int, int] | None:
     """Query xdotool on Linux/X11 to locate window coordinates (x, y, w, h)."""
     if not shutil.which("xdotool"):
         return None
@@ -173,14 +175,14 @@ def _find_window_rect_x11(title_pattern: str) -> Optional[Tuple[int, int, int, i
         return None
 
 
-def _find_window_rect_windows(title_pattern: str) -> Optional[Tuple[int, int, int, int]]:
+def _find_window_rect_windows(title_pattern: str) -> tuple[int, int, int, int] | None:
     """Locate window coordinates on Windows using Win32 API if available."""
     try:
         import win32gui
 
         matched_hwnd = None
 
-        def enum_windows_callback(hwnd, extra):
+        def enum_windows_callback(hwnd: int, extra: object) -> None:
             nonlocal matched_hwnd
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd)
@@ -212,15 +214,15 @@ def _generate_synthetic_desktop(title: str, width: int = 1280, height: int = 720
 
 def capture_desktop_window(
     title_pattern: str = "Gazebo",
-    save_path: Optional[str | Path] = None,
+    save_path: str | Path | None = None,
 ) -> VisionResult:
     """Capture a specific desktop application window, falling back to full desktop or synthetic frame."""
     t0 = time.perf_counter()
     import mss
 
-    rect: Optional[Tuple[int, int, int, int]] = None
-    fallback: Optional[str] = None
-    img: Optional[Image.Image] = None
+    rect: tuple[int, int, int, int] | None = None
+    fallback: str | None = None
+    img: Image.Image | None = None
 
     if sys.platform.startswith("linux"):
         rect = _find_window_rect_x11(title_pattern)
@@ -280,12 +282,12 @@ def capture_desktop_window(
     )
 
 
-async def capture_gazebo_window(save_path: Optional[str | Path] = None) -> dict[str, Any]:
+async def capture_gazebo_window(save_path: str | Path | None = None) -> dict[str, Any]:
     """Capture active Gazebo desktop simulation window."""
     return capture_desktop_window("Gazebo", save_path).to_dict()
 
 
-async def capture_rviz_window(save_path: Optional[str | Path] = None) -> dict[str, Any]:
+async def capture_rviz_window(save_path: str | Path | None = None) -> dict[str, Any]:
     """Capture active RViz2 desktop GUI window."""
     return capture_desktop_window("RViz", save_path).to_dict()
 
@@ -345,7 +347,7 @@ class CameraSampler:
 
     def __init__(self, topic: str = "/camera/image_raw") -> None:
         self.topic = topic
-        self.last_frame: Optional[Image.Image] = None
+        self.last_frame: Image.Image | None = None
         self.last_timestamp: float = 0.0
         self.fps: float = 0.0
         self._subscription = None
@@ -360,7 +362,7 @@ class CameraSampler:
                 rclpy.init(args=None)
             node = rclpy.create_node("lang2sim_vision_sampler")
 
-            def _callback(msg: RosImage):
+            def _callback(msg: RosImage) -> None:
                 t_now = time.time()
                 dt = t_now - self.last_timestamp
                 if dt > 0:
@@ -386,7 +388,8 @@ class CameraSampler:
             # ROS 2 not installed or daemon not running — lazy fallback
             pass
 
-    def sample(self, save_path: Optional[str | Path] = None) -> VisionResult:
+    def sample(self, save_path: str | Path | None = None) -> VisionResult:
+        """Capture the latest camera frame or a synthetic fallback and optionally save it."""
         t0 = time.perf_counter()
         if self.last_frame is not None:
             img = self.last_frame
@@ -428,10 +431,11 @@ class CameraSampler:
         )
 
 
-_GLOBAL_SAMPLER: Optional[CameraSampler] = None
+_GLOBAL_SAMPLER: CameraSampler | None = None
 
 
 def get_camera_sampler(topic: str = "/camera/image_raw") -> CameraSampler:
+    """Return the global singleton camera observer instance for the specified ROS image topic."""
     global _GLOBAL_SAMPLER
     if _GLOBAL_SAMPLER is None or _GLOBAL_SAMPLER.topic != topic:
         _GLOBAL_SAMPLER = CameraSampler(topic)
@@ -440,14 +444,14 @@ def get_camera_sampler(topic: str = "/camera/image_raw") -> CameraSampler:
 
 async def read_robot_camera(
     topic: str = "/camera/image_raw",
-    save_path: Optional[str | Path] = None,
+    save_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Read latest frame from on-board robot camera topic."""
     return get_camera_sampler(topic).sample(save_path).to_dict()
 
 
 # --------------------------------------------------------------------------- CLI
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Lang2Sim Dual-Stream Visual Observer")
     parser.add_argument(
         "--target",

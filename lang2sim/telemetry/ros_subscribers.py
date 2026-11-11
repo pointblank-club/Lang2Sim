@@ -21,9 +21,10 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Deque, Optional, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -51,7 +52,7 @@ class CollisionCounter:
         self,
         threshold_n: float = FORCE_THRESHOLD_NEWTONS,
         cooldown_s: float = COOLDOWN_SECONDS,
-        ignored_entities: Optional[Sequence[str]] = None,
+        ignored_entities: Sequence[str] | None = None,
     ) -> None:
         self.threshold_n = threshold_n
         self.cooldown_s = cooldown_s
@@ -68,7 +69,7 @@ class CollisionCounter:
         self,
         force_vector: Sequence[float],
         entity_name: str = "",
-        timestamp: Optional[float] = None,
+        timestamp: float | None = None,
     ) -> bool:
         """Process a contact force sample. Returns True if a new structural collision is registered."""
         t_now = time.time() if timestamp is None else timestamp
@@ -94,6 +95,7 @@ class CollisionCounter:
         return False
 
     def reset(self) -> None:
+        """Clear collision counts and the remembered contact state."""
         self.collision_count = 0
         self.last_collision_time = 0.0
         self.in_collision = False
@@ -104,6 +106,8 @@ class CollisionCounter:
 # --------------------------------------------------------------------------- Telemetry Sample
 @dataclass
 class TelemetrySample:
+    """Synchronized kinematic state and collision snapshot at a given timestamp."""
+
     t: float
     x: float
     y: float
@@ -112,9 +116,9 @@ class TelemetrySample:
     w: float
     collision_count: int = 0
     last_force_n: float = 0.0
-    slam_x: Optional[float] = None
-    slam_y: Optional[float] = None
-    ate: Optional[float] = None
+    slam_x: float | None = None
+    slam_y: float | None = None
+    ate: float | None = None
 
 
 # --------------------------------------------------------------------------- Telemetry Collector
@@ -124,21 +128,21 @@ class TelemetryCollector:
     def __init__(
         self,
         buffer_size: int = RING_BUFFER_SIZE,
-        api_base_url: Optional[str] = None,
+        api_base_url: str | None = None,
         poll_interval: float = 0.1,
     ) -> None:
         self.lock = threading.Lock()
-        self.ring_buffer: Deque[TelemetrySample] = collections.deque(maxlen=buffer_size)
+        self.ring_buffer: collections.deque[TelemetrySample] = collections.deque(maxlen=buffer_size)
         self.bumper = CollisionCounter()
-        self.active_run_samples: Optional[list[dict[str, float]]] = None
+        self.active_run_samples: list[dict[str, float]] | None = None
         self.run_label: str = ""
-        self.goal: Optional[tuple[float, float]] = None
+        self.goal: tuple[float, float] | None = None
         self._executor = None
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._ros_ok = False
         self._api_ok = False
         self._api_running = False
-        self._api_thread: Optional[threading.Thread] = None
+        self._api_thread: threading.Thread | None = None
         self.rtf: float = 1.0
         self.sim_time: float = 0.0
         self.poll_interval = poll_interval
@@ -146,12 +150,12 @@ class TelemetryCollector:
             api_base_url or os.environ.get("LANG2SIM_CONTROL_API") or "http://127.0.0.1:9090"
         )
         # SLAM drift tracking metrics
-        self.latest_slam_pose: Optional[tuple[float, float, float]] = None
+        self.latest_slam_pose: tuple[float, float, float] | None = None
         self.current_ate: float = 0.0
         self.max_ate: float = 0.0
         self.ate_history: list[float] = []
         self.ate_divergence_threshold: float = 0.35
-        self._api_live: Optional[dict[str, Any]] = None  # last TelemetryLive from the control API
+        self._api_live: dict[str, Any] | None = None  # last TelemetryLive from the control API
 
         self._init_ros()
         if not self._ros_ok:
@@ -166,7 +170,7 @@ class TelemetryCollector:
                 rclpy.init(args=None)
             node = rclpy.create_node("lang2sim_telemetry_subscriber")
 
-            def _odom_cb(msg: Odometry):
+            def _odom_cb(msg: Odometry) -> None:
                 p = msg.pose.pose.position
                 q = msg.pose.pose.orientation
                 # Quaternion -> Yaw
@@ -183,7 +187,7 @@ class TelemetryCollector:
             try:
                 from gazebo_msgs.msg import ContactsState  # type: ignore[import-not-found]
 
-                def _contact_cb(msg: ContactsState):
+                def _contact_cb(msg: ContactsState) -> None:
                     for state in msg.states:
                         total_force = [0.0, 0.0, 0.0]
                         for f in state.total_wrench:
@@ -214,9 +218,10 @@ class TelemetryCollector:
         yaw: float,
         v: float,
         w: float,
-        slam_x: Optional[float] = None,
-        slam_y: Optional[float] = None,
+        slam_x: float | None = None,
+        slam_y: float | None = None,
     ) -> None:
+        """Record one kinematic sample and optional SLAM position for drift scoring."""
         calc_ate = None
         if slam_x is not None and slam_y is not None:
             calc_ate = math.hypot(x - slam_x, y - slam_y)
@@ -284,7 +289,7 @@ class TelemetryCollector:
                 best_active["ate"] = ate
             return ate
 
-    def start_run(self, label: str = "run", goal: Optional[tuple[float, float]] = None) -> None:
+    def start_run(self, label: str = "run", goal: tuple[float, float] | None = None) -> None:
         """Begin recording an evaluation run for NQI scoring."""
         with self.lock:
             self.run_label = label
@@ -432,7 +437,7 @@ class TelemetryCollector:
 class ReplaySource:
     """Mock telemetry provider replaying synthetic trajectories or recorded JSON files."""
 
-    def __init__(self, trajectory: Optional[Trajectory] = None) -> None:
+    def __init__(self, trajectory: Trajectory | None = None) -> None:
         self.trajectory = trajectory
         self.index = 0
         self.collisions = 0
@@ -440,10 +445,12 @@ class ReplaySource:
 
     @classmethod
     def from_json(cls, json_path: str | Path) -> ReplaySource:
+        """Create a replay source by loading a trajectory JSON file."""
         traj = Trajectory.from_json(json_path)
         return cls(traj)
 
     def snapshot(self) -> dict[str, Any]:
+        """Return the replay's current state, or an inactive zero state without a trajectory."""
         if self.trajectory is None or self.trajectory.n == 0:
             return {
                 "active": False,
@@ -471,10 +478,11 @@ class ReplaySource:
         }
 
 
-_GLOBAL_COLLECTOR: Optional[TelemetryCollector] = None
+_GLOBAL_COLLECTOR: TelemetryCollector | None = None
 
 
 def get_telemetry_collector() -> TelemetryCollector:
+    """Return the global singleton instance of TelemetryCollector."""
     global _GLOBAL_COLLECTOR
     if _GLOBAL_COLLECTOR is None:
         _GLOBAL_COLLECTOR = TelemetryCollector()

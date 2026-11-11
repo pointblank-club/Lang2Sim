@@ -30,17 +30,25 @@ import json
 import math
 import sys
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI as FastAPIType
+    from fastapi import WebSocket as WebSocketType
 
 try:  # module level: with postponed annotations FastAPI resolves `ws: WebSocket` from these globals
     from fastapi import APIRouter, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 except ImportError:  # snapshot/clock logic stays importable without the [sim] extra
     APIRouter = FastAPI = HTTPException = WebSocket = WebSocketDisconnect = None  # type: ignore
+else:
+    globals().update({"FastAPIType": FastAPI, "WebSocketType": WebSocket})
 
+from lang2sim.core.models import SimSpec
 from lang2sim.runtime.dashboard import make_router, read_report
 from lang2sim.runtime.telemetry_recorder import load_recorded_runs
 from lang2sim.telemetry.benchmark import (
@@ -58,6 +66,8 @@ REACHED_M = 0.35  # a waypoint counts as reached within this distance
 
 @dataclass
 class PlayedRun:
+    """Pre-computed trajectory samples and obstacles for replay playback."""
+
     label: str
     t: np.ndarray  # sim seconds (as recorded)
     x: np.ndarray
@@ -66,23 +76,24 @@ class PlayedRun:
     v: np.ndarray
     w: np.ndarray
     clearance: np.ndarray  # chassis-to-obstacle, per sample (crate only after it appears)
-    loc_err: Optional[np.ndarray]
-    targets: List[tuple]
+    loc_err: np.ndarray | None
+    targets: list[tuple]
     target_idx: np.ndarray  # index of the waypoint being driven to, per sample
-    contacts: List[Dict[str, Any]]
-    crates: List[Dict[str, Any]]  # spawned entities, each with "appear_t" (sim seconds)
+    contacts: list[dict[str, Any]]
+    crates: list[dict[str, Any]]  # spawned entities, each with "appear_t" (sim seconds)
     nav_status: str
     contact_force_source: str
     pose_source: str
 
     @property
     def duration(self) -> float:
+        """Return the elapsed simulation time covered by this played run."""
         return float(self.t[-1] - self.t[0]) if len(self.t) > 1 else 0.0
 
 
 def _crate_times(
-    label: str, run_meta: Dict[str, Any], report: Optional[Dict[str, Any]], t0: float
-) -> List[Dict[str, Any]]:
+    label: str, run_meta: dict[str, Any], report: dict[str, Any] | None, t0: float
+) -> list[dict[str, Any]]:
     crates = [dict(e) for e in run_meta.get("spawned_entities") or []]
     fired = iter(
         [tr.get("fired_at_s") for tr in ((report or {}).get("stress") or {}).get("triggers") or []]
@@ -96,8 +107,13 @@ def _crate_times(
 
 
 def build_played_run(
-    label: str, data: Dict[str, Any], run_dir: Path, spec: Any, report: Optional[Dict[str, Any]]
+    label: str,
+    data: dict[str, Any],
+    run_dir: Path,
+    spec: SimSpec | Mapping[str, Any] | None,
+    report: dict[str, Any] | None,
 ) -> PlayedRun:
+    """Build a PlayedRun instance with clearances and waypoint targets from trajectory data."""
     traj = Trajectory.from_dict(data)
     meta = data.get("meta") or {}
     occupancy = load_occupancy(run_dir)
@@ -150,16 +166,17 @@ def build_played_run(
 class ReplayClock:
     """Which run and which sample to show at a given wall time."""
 
-    runs: List[PlayedRun]
+    runs: list[PlayedRun]
     speed: float = 1.0
     loop: bool = False
     started: float = field(default_factory=time.monotonic)
 
     @property
     def cycle(self) -> float:
+        """Return total playback cycle duration, including pauses between runs."""
         return sum(r.duration / self.speed + PAUSE_BETWEEN_RUNS_S for r in self.runs)
 
-    def position(self, now: Optional[float] = None) -> tuple:
+    def position(self, now: float | None = None) -> tuple:
         """(run index, sample index, playing?) at wall time `now`."""
         elapsed = (now if now is not None else time.monotonic()) - self.started
         if self.loop and self.cycle > 0:
@@ -177,14 +194,15 @@ class ReplayClock:
         return len(self.runs) - 1, len(last.t) - 1, False
 
     def restart(self) -> None:
+        """Reset the playback start time to the current monotonic clock."""
         self.started = time.monotonic()
 
 
-def _f(v: Any, d: int = 3) -> Optional[float]:
+def _f(v: int | float | str | None, d: int = 3) -> float | None:
     return None if v is None or not math.isfinite(float(v)) else round(float(v), d)
 
 
-def snapshot(clock: ReplayClock, now: Optional[float] = None) -> Dict[str, Any]:
+def snapshot(clock: ReplayClock, now: float | None = None) -> dict[str, Any]:
     """{"live": TelemetryLive fields, "nav": NavStatus fields, "sim": {...}} at wall time `now`."""
     ri, i, playing = clock.position(now)
     r = clock.runs[ri]
@@ -241,6 +259,7 @@ def snapshot(clock: ReplayClock, now: Optional[float] = None) -> Dict[str, Any]:
 def load_replay(
     run_dir: Path, which: str = "both", speed: float = 1.0, loop: bool = False
 ) -> ReplayClock:
+    """Load recorded trajectories and construct a playback ReplayClock."""
     from lang2sim.core.models import SimSpec
 
     run_dir = Path(run_dir)
@@ -259,7 +278,10 @@ def load_replay(
     return ReplayClock(runs=[r for r in runs if len(r.t) >= 2], speed=max(0.05, speed), loop=loop)
 
 
-def create_replay_app(run_dir: Path, which: str = "both", speed: float = 1.0, loop: bool = False):
+def create_replay_app(
+    run_dir: Path, which: str = "both", speed: float = 1.0, loop: bool = False
+) -> FastAPIType:
+    """Create a FastAPI app serving replay endpoints mimicking the control API."""
     if FastAPI is None:
         raise ImportError("the replay server needs FastAPI: pip install -e '.[sim]'")
     import lang2sim
@@ -367,7 +389,7 @@ def create_replay_app(run_dir: Path, which: str = "both", speed: float = 1.0, lo
         v1.add_api_route(path, read_only, methods=["POST"], include_in_schema=False)
 
     @v1.websocket("/nav/feedback")
-    async def nav_feedback(ws: WebSocket, hz: float = 5.0) -> None:
+    async def nav_feedback(ws: WebSocketType, hz: float = 5.0) -> None:
         await ws.accept()
         period = 1.0 / max(0.5, min(hz, 20.0))
         try:
@@ -397,7 +419,8 @@ def create_replay_app(run_dir: Path, which: str = "both", speed: float = 1.0, lo
     return app
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entrypoint to launch the replay fallback web server."""
     ap = argparse.ArgumentParser(
         description="Replay a recorded Lang2Sim run through the control API "
         "(demo fallback when the live sim is down)."

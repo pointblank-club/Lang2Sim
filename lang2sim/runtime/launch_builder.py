@@ -25,13 +25,14 @@ from __future__ import annotations
 import pprint
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import List
 
 LAUNCH_FILE = "sim_launch.py"
 
 
 @dataclass(frozen=True)
 class LaunchConfig:
+    """All settings baked into a generated ``sim_launch.py`` for one simulation run."""
+
     run_dir: str  # container path; logs and generated params go here
     world_sdf: str  # container path, already checked/normalized
     world_name: str
@@ -44,7 +45,7 @@ class LaunchConfig:
     camera: bool = True  # image bridge; heavy under software rendering
     nav2_params: str = ""  # "" -> TurtleBot3 Waffle params
     nav2_delay_s: float = 5.0
-    resource_paths: List[str] = field(default_factory=list)  # extra GZ_SIM_RESOURCE_PATH entries
+    resource_paths: list[str] = field(default_factory=list)  # extra GZ_SIM_RESOURCE_PATH entries
     robot: str = "waffle"
     robot_sdf: str = (
         ""  # "" -> stock TurtleBot3 model.sdf; else robot.l2s.sdf (bumper + ground truth)
@@ -143,6 +144,7 @@ def render(cfg: LaunchConfig) -> str:
 
 
 def write(cfg: LaunchConfig, out_dir: Path | None = None) -> Path:
+    """Render the launch file for ``cfg`` and write it to ``out_dir`` (or ``cfg.run_dir``)."""
     path = Path(out_dir or cfg.run_dir) / LAUNCH_FILE
     path.write_text(render(cfg), encoding="utf-8")
     return path

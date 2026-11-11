@@ -35,11 +35,12 @@ import json
 import math
 import threading
 import time
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any
 
-Pose = Tuple[float, float, float]  # x, y, yaw
+Pose = tuple[float, float, float]  # x, y, yaw
 
 FORCE_THRESHOLD_N = 5.0  # architecture §7.4 / Issue #4: force events > 5 N
 CONTACT_COOLDOWN_S = 0.5  # sim seconds between two counted collisions
@@ -51,6 +52,7 @@ IGNORED_CONTACT_ENTITIES = ("ground_plane", "ground", "floor", "world")
 
 
 def wrap_angle(a: float) -> float:
+    """Normalize an angle into [-pi, pi]."""
     return math.atan2(math.sin(a), math.cos(a))
 
 
@@ -63,11 +65,11 @@ def world_from_odom(odom: Pose, spawn: Pose) -> Pose:
 
 
 def best_pose(
-    ground_truth: Optional[Pose],
-    map_pose: Optional[Pose],
-    odom_pose: Optional[Pose],
-    spawn: Optional[Pose],
-) -> Tuple[Optional[Pose], str]:
+    ground_truth: Pose | None,
+    map_pose: Pose | None,
+    odom_pose: Pose | None,
+    spawn: Pose | None,
+) -> tuple[Pose | None, str]:
     """(world pose, source) from the most trustworthy source available."""
     if ground_truth is not None:
         return ground_truth, "ground_truth"
@@ -78,7 +80,7 @@ def best_pose(
     return None, "none"
 
 
-def min_valid_range(ranges: Iterable[float], range_min: float, range_max: float) -> Optional[float]:
+def min_valid_range(ranges: Iterable[float], range_min: float, range_max: float) -> float | None:
     """Closest finite lidar return inside [range_min, range_max], or None."""
     best = math.inf
     for r in ranges:
@@ -90,12 +92,15 @@ def min_valid_range(ranges: Iterable[float], range_min: float, range_max: float)
 # --------------------------------------------------------------------------- contacts
 @dataclass
 class ContactEvent:
+    """Collision or contact event recorded during simulation traversal."""
+
     t: float
     entity: str
-    force_n: Optional[float]
+    force_n: float | None
     source: str  # "wrench" | "geometric"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize event time, entity, force, and measurement source."""
         return {
             "t": round(self.t, 3),
             "entity": self.entity,
@@ -137,11 +142,12 @@ class ContactMonitor:
         self.reset()
 
     def reset(self) -> None:
+        """Clear collision counters, events, and contact timing state."""
         self.count = 0
-        self.events: List[ContactEvent] = []
+        self.events: list[ContactEvent] = []
         self.in_contact = False
-        self.last_contact_t: Optional[float] = None
-        self.last_counted_t: Optional[float] = None
+        self.last_contact_t: float | None = None
+        self.last_counted_t: float | None = None
         self.last_force_n = 0.0
         self.last_entity = ""
         self.force_source = "none"
@@ -163,10 +169,10 @@ class ContactMonitor:
         ):
             self.in_contact = False
 
-    def process(self, contacts: Sequence[Tuple[str, Optional[float]]], t: float) -> bool:
+    def process(self, contacts: Sequence[tuple[str, float | None]], t: float) -> bool:
         """Feed one contact message; returns True when it registers a new collision."""
         self.tick(t)
-        hits: List[Tuple[str, Optional[float]]] = []
+        hits: list[tuple[str, float | None]] = []
         for entity, force in contacts:
             if not self._relevant(entity):
                 continue
@@ -205,16 +211,16 @@ class ContactMonitor:
 @dataclass
 class _Run:
     label: str
-    goal: Optional[Pose]
+    goal: Pose | None
     rate_hz: float
-    spawn: Optional[Pose]
+    spawn: Pose | None
     start_count: int
-    samples: List[Dict[str, float]] = field(default_factory=list)
-    sources: Dict[str, int] = field(default_factory=dict)
-    min_scan: Optional[float] = None
-    last_t: Optional[float] = None
+    samples: list[dict[str, float]] = field(default_factory=list)
+    sources: dict[str, int] = field(default_factory=dict)
+    min_scan: float | None = None
+    last_t: float | None = None
     stream: Any = None  # open JSON-lines file, or None
-    stream_path: Optional[Path] = None
+    stream_path: Path | None = None
 
 
 class TelemetryRecorder:
@@ -225,41 +231,46 @@ class TelemetryRecorder:
     lang2sim.telemetry.Trajectory.to_dict() format.
     """
 
-    def __init__(self, contacts: Optional[ContactMonitor] = None) -> None:
+    def __init__(self, contacts: ContactMonitor | None = None) -> None:
         self._lock = threading.Lock()
         self.contacts = contacts or ContactMonitor()
-        self._run: Optional[_Run] = None
+        self._run: _Run | None = None
 
     @property
     def recording(self) -> bool:
+        """Report whether a telemetry recording is currently active."""
         return self._run is not None
 
     @property
-    def label(self) -> Optional[str]:
+    def label(self) -> str | None:
+        """Return the active recording label, or ``None`` when idle."""
         run = self._run
         return run.label if run else None
 
     @property
-    def goal(self) -> Optional[Pose]:
+    def goal(self) -> Pose | None:
+        """Return the active recording goal pose, or ``None`` when idle."""
         run = self._run
         return run.goal if run else None
 
     @property
     def sample_count(self) -> int:
+        """Return the number of samples in the active recording."""
         run = self._run
         return len(run.samples) if run else 0
 
     def collisions(self) -> int:
+        """Return collisions counted since the current recording began."""
         run = self._run
         return self.contacts.count - (run.start_count if run else 0)
 
     def start(
         self,
         label: str,
-        goal: Optional[Pose] = None,
+        goal: Pose | None = None,
         rate_hz: float = 20.0,
-        spawn: Optional[Pose] = None,
-        stream_path: Optional[Path] = None,
+        spawn: Pose | None = None,
+        stream_path: Path | None = None,
     ) -> None:
         """Begin a recording (replacing any in progress). Collisions are counted from here.
 
@@ -297,7 +308,7 @@ class TelemetryRecorder:
             )
         self.contacts.on_event = self._stream_event if stream is not None else None
 
-    def _write(self, run: _Run, record: Dict[str, Any]) -> None:
+    def _write(self, run: _Run, record: dict[str, Any]) -> None:
         if run.stream is None:
             return
         try:
@@ -313,12 +324,12 @@ class TelemetryRecorder:
     def offer(
         self,
         t: float,
-        pose: Optional[Pose],
+        pose: Pose | None,
         source: str,
         v: float,
         w: float,
-        estimate: Optional[Pose] = None,
-        scan_min: Optional[float] = None,
+        estimate: Pose | None = None,
+        scan_min: float | None = None,
     ) -> bool:
         """One pose update. `estimate` is AMCL's map pose (kept only when `pose` is ground truth,
         so the trajectory's slam_x/slam_y/ate columns measure localization error).
@@ -334,7 +345,7 @@ class TelemetryRecorder:
                     return False
                 if t - run.last_t < 1.0 / run.rate_hz - 1e-6:
                     return False
-            s: Dict[str, float] = {
+            s: dict[str, float] = {
                 "t": float(t),
                 "x": float(pose[0]),
                 "y": float(pose[1]),
@@ -350,7 +361,7 @@ class TelemetryRecorder:
             self._write(run, {"type": "sample", "source": source, "scan_min": scan_min, **s})
             return True
 
-    def stop(self, keep_partial: bool = False) -> Optional[Dict[str, Any]]:
+    def stop(self, keep_partial: bool = False) -> dict[str, Any] | None:
         """End the recording; None if nothing was recording.
 
         The streamed partial file is removed unless `keep_partial` (the caller writes the
@@ -387,16 +398,16 @@ class TelemetryRecorder:
 def assemble_trajectory(
     *,
     label: str,
-    goal: Optional[Sequence[float]],
+    goal: Sequence[float] | None,
     rate_hz: float,
-    spawn: Optional[Sequence[float]],
-    samples: List[Dict[str, float]],
-    sources: Dict[str, int],
-    min_scan: Optional[float],
+    spawn: Sequence[float] | None,
+    samples: list[dict[str, float]],
+    sources: dict[str, int],
+    min_scan: float | None,
     contact_force_source: str,
-    events: List[Dict[str, Any]],
+    events: list[dict[str, Any]],
     partial: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Trajectory.to_dict() format + telemetry meta, from recorded samples."""
     # slam_x/slam_y must be on every sample for Trajectory to keep the column.
     if samples and not all("slam_x" in s for s in samples):
@@ -428,17 +439,18 @@ def assemble_trajectory(
 
 
 def partial_path(logs_dir: Path, label: str) -> Path:
+    """Return the filesystem path for an in-flight partial trajectory log."""
     return Path(logs_dir) / f"trajectory_{label}{PARTIAL_SUFFIX}"
 
 
-def load_partial(path: Path) -> Optional[Dict[str, Any]]:
+def load_partial(path: Path) -> dict[str, Any] | None:
     """Rebuild a trajectory dict from a streamed .partial.jsonl (a run that never reached
     record/stop). Tolerates a torn last line. None if it holds fewer than 2 samples."""
-    header: Dict[str, Any] = {}
-    samples: List[Dict[str, float]] = []
-    sources: Dict[str, int] = {}
-    events: List[Dict[str, Any]] = []
-    min_scan: Optional[float] = None
+    header: dict[str, Any] = {}
+    samples: list[dict[str, float]] = []
+    sources: dict[str, int] = {}
+    events: list[dict[str, Any]] = []
+    min_scan: float | None = None
     force_source = "none"
     try:
         lines = Path(path).read_text(encoding="utf-8").splitlines()
@@ -484,16 +496,16 @@ def load_partial(path: Path) -> Optional[Dict[str, Any]]:
 def build_live(
     *,
     sim_time: float,
-    rtf: Optional[float],
-    pose: Optional[Pose],
+    rtf: float | None,
+    pose: Pose | None,
     source: str,
-    velocity: Optional[Tuple[float, float, float]],
-    ground_truth: Optional[Pose],
-    map_pose: Optional[Pose],
-    scan_min: Optional[float],
+    velocity: tuple[float, float, float] | None,
+    ground_truth: Pose | None,
+    map_pose: Pose | None,
+    scan_min: float | None,
     recorder: TelemetryRecorder,
-    goal: Optional[Pose] = None,
-) -> Dict[str, Any]:
+    goal: Pose | None = None,
+) -> dict[str, Any]:
     """Fields of core.models.TelemetryLive from the bridge state (kept as a dict: no pydantic here)."""
     goal = goal or recorder.goal
     loc_err = (
@@ -539,8 +551,9 @@ def build_live(
 LABELS = ("nominal", "adversarial")
 
 
-def read_jsonl(path: Path) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read and parse lines from a JSON lines file, ignoring malformed lines."""
+    out: list[dict[str, Any]] = []
     try:
         for line in Path(path).read_text(encoding="utf-8").splitlines():
             try:
@@ -552,7 +565,7 @@ def read_jsonl(path: Path) -> List[Dict[str, Any]]:
     return out
 
 
-def load_recorded_runs(run_dir: Path) -> Dict[str, Dict[str, Any]]:
+def load_recorded_runs(run_dir: Path) -> dict[str, dict[str, Any]]:
     """Recorded trajectories of a run folder, by label (nominal first).
 
     Uses logs/trajectory_<label>.json when the recording finished, else the streamed
@@ -561,7 +574,7 @@ def load_recorded_runs(run_dir: Path) -> Dict[str, Dict[str, Any]]:
     session (after the last session_start marker) before the next recording started.
     """
     logs = Path(run_dir) / "logs"
-    found: Dict[str, Dict[str, Any]] = {}
+    found: dict[str, dict[str, Any]] = {}
     labels = list(LABELS) + sorted(
         {p.name[len("trajectory_") :].split(".")[0] for p in logs.glob("trajectory_*")}
         - set(LABELS)

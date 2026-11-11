@@ -25,15 +25,21 @@ import math
 import queue
 import threading
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Sequence
+from typing import Any, Protocol
 
 from lang2sim.core.models import NavStatus, Pose2D
 
 POLL_S = 0.1
 
 
-def _ros_navigator() -> Any:
+class _RosDuration(Protocol):
+    sec: int
+    nanosec: int
+
+
+def _ros_navigator() -> Any:  # noqa: ANN401 - navigator is provided by optional ROS packages
     from nav2_simple_commander.robot_navigator import (
         BasicNavigator,  # type: ignore[import-not-found]
     )
@@ -44,7 +50,7 @@ def _ros_navigator() -> Any:
     return nav
 
 
-def _ros_pose(nav: Any, p: Pose2D) -> Any:
+def _ros_pose(nav: Any, p: Pose2D) -> Any:  # noqa: ANN401 - ROS pose messages are runtime-only
     from geometry_msgs.msg import PoseStamped  # type: ignore[import-not-found]
 
     ps = PoseStamped()
@@ -55,7 +61,7 @@ def _ros_pose(nav: Any, p: Pose2D) -> Any:
     return ps
 
 
-def _seconds(duration: Any) -> float:
+def _seconds(duration: int | float | _RosDuration | None) -> float:
     """builtin_interfaces/Duration (or a float in tests) -> seconds."""
     if duration is None:
         return 0.0
@@ -67,11 +73,19 @@ def _seconds(duration: Any) -> float:
 @dataclass
 class _Task:
     kind: str  # "goal" | "waypoints" | "initial_pose"
-    poses: List[Pose2D]
+    poses: list[Pose2D]
     timeout_s: float = 120.0
 
 
 class NavDispatcher:
+    """Thread-safe Nav2 goal dispatcher.
+
+    Owns a single ``BasicNavigator`` worker thread. API callers on any thread
+    enqueue commands via ``go_to`` / ``follow`` / ``set_initial_pose``; the
+    worker thread executes them sequentially, with the newest command preempting
+    the current one.
+    """
+
     def __init__(
         self,
         navigator_factory: Callable[[], Any] = _ros_navigator,
@@ -84,33 +98,37 @@ class NavDispatcher:
         self._queue: queue.Queue[_Task] = queue.Queue()
         self._cancel = threading.Event()
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._nav: Any = None
-        self._last: Optional[_Task] = None
+        self._last: _Task | None = None
 
     # --- API (any thread) ---------------------------------------------------
     def status(self) -> NavStatus:
+        """Return a defensive copy of the current navigation status."""
         with self._lock:
             return self._status.model_copy()
 
     def set_initial_pose(self, pose: Pose2D) -> None:
+        """Queue an initial localization pose for the navigation worker."""
         self._submit(_Task("initial_pose", [pose]))
 
     def go_to(self, goal: Pose2D, timeout_s: float = 120.0) -> NavStatus:
+        """Submit a single navigation goal with a timeout in seconds."""
         return self._submit(_Task("goal", [goal], timeout_s))
 
     def follow(self, waypoints: Sequence[Pose2D], timeout_s: float = 180.0) -> NavStatus:
+        """Submit an ordered waypoint task, requiring at least one waypoint."""
         if not waypoints:
             raise ValueError("at least one waypoint is required")
         return self._submit(_Task("waypoints", list(waypoints), timeout_s))
 
-    def remaining(self) -> List[Pose2D]:
+    def remaining(self) -> list[Pose2D]:
         """Poses of the current/last task from the leg in progress onwards (for re-planning)."""
         with self._lock:
             task, idx = self._last, self._status.waypoint_index
         return list(task.poses[idx:]) if task else []
 
-    def resume_with(self, first: Pose2D, timeout_s: Optional[float] = None) -> NavStatus:
+    def resume_with(self, first: Pose2D, timeout_s: float | None = None) -> NavStatus:
         """Replace the current leg's target with `first`, keep the rest of the mission."""
         rest = self.remaining()[1:]
         timeout = (
@@ -121,12 +139,14 @@ class NavDispatcher:
         return self.go_to(first, timeout)
 
     def cancel(self) -> NavStatus:
+        """Cancel active navigation and return the latest task status."""
         self._drain()
         if self.status().is_active:
             self._cancel.set()
         return self.status()
 
     def shutdown(self) -> None:
+        """Stop the navigation worker and wait briefly for its thread to exit."""
         self._stop.set()
         self._cancel.set()
         if self._thread:
@@ -163,7 +183,7 @@ class NavDispatcher:
         self._thread = threading.Thread(target=self._worker, name="l2s-nav", daemon=True)
         self._thread.start()
 
-    def _set(self, **kw: Any) -> None:
+    def _set(self, **kw: object) -> None:
         with self._lock:
             self._status = self._status.model_copy(update=kw)
 
@@ -211,7 +231,7 @@ class NavDispatcher:
             message=None,
         )
 
-    def _leg(self, pose: Pose2D, timeout_s: float):
+    def _leg(self, pose: Pose2D, timeout_s: float) -> tuple[str, str | None]:
         nav = self._nav
         if not nav.goToPose(self._make_pose(nav, pose)):
             return "failed", "goal rejected by Nav2 (bt_navigator not active?)"

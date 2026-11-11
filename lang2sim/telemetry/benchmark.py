@@ -25,9 +25,11 @@ and writes benchmark_report.json into the run folder (architecture §4.2).
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
+from lang2sim.core.models import SimSpec
 from lang2sim.telemetry.nqi_scorer import (
     NQIParams,
     OccupancyGrid,
@@ -46,10 +48,10 @@ NAV2_PARAMS_NAME = "nav2_params.l2s.yaml"
 # 0.018 m width -> x in [-0.197, 0.069], y in [-0.153, 0.153].
 WAFFLE_FOOTPRINT = (-0.197, 0.069, -0.153, 0.153)
 
-XY = Tuple[float, float]
+XY = tuple[float, float]
 
 
-def nav2_goal_tolerance(nav2_params: Path) -> Optional[float]:
+def nav2_goal_tolerance(nav2_params: Path) -> float | None:
     """xy_goal_tolerance of the controller's goal checker in a Nav2 params file, or None."""
     try:
         text = Path(nav2_params).read_text(encoding="utf-8")
@@ -89,8 +91,8 @@ def nav2_goal_tolerance(nav2_params: Path) -> Optional[float]:
 
 
 def scoring_params(
-    run_dir: Optional[Path], goal_tolerance: Optional[float] = None, base: NQIParams = NQIParams()
-) -> Tuple[NQIParams, Dict[str, Any]]:
+    run_dir: Path | None, goal_tolerance: float | None = None, base: NQIParams = NQIParams()
+) -> tuple[NQIParams, dict[str, Any]]:
     """NQI params for a recorded TurtleBot3 Waffle run, and where each choice came from."""
     from dataclasses import replace
 
@@ -110,7 +112,7 @@ def scoring_params(
     }
 
 
-def mission_targets(spec: Any) -> List[XY]:
+def mission_targets(spec: SimSpec | Mapping[str, Any]) -> list[XY]:
     """Waypoints then goal, as (x, y), from a SimSpec (or its dict)."""
     m = spec.mission if hasattr(spec, "mission") else spec["mission"]
     get = (lambda p, k: getattr(p, k)) if hasattr(m, "goal_pose") else (lambda p, k: p[k])
@@ -122,9 +124,9 @@ def mission_targets(spec: Any) -> List[XY]:
 def mission_optimal_length(
     start: Sequence[float],
     targets: Sequence[XY],
-    occupancy: Optional[OccupancyGrid],
+    occupancy: OccupancyGrid | None,
     r_robot: float = NQIParams.r_robot,
-) -> Tuple[float, str]:
+) -> tuple[float, str]:
     """Sum of shortest collision-free legs start -> t1 -> ... -> goal, and the weakest method used."""
     total, methods = 0.0, []
     prev = (float(start[0]), float(start[1]))
@@ -141,7 +143,8 @@ def mission_optimal_length(
     return total, method
 
 
-def load_occupancy(run_dir: Path, map_name: str = "map.yaml") -> Optional[OccupancyGrid]:
+def load_occupancy(run_dir: Path, map_name: str = "map.yaml") -> OccupancyGrid | None:
+    """Load an occupancy grid from map.yaml in the run directory if present."""
     path = Path(run_dir) / map_name
     if not path.is_file():
         return None
@@ -156,7 +159,7 @@ BOX_OUTLINE_STEP_M = 0.05
 
 def footprint_points(
     entity: Mapping[str, Any], step: float = BOX_OUTLINE_STEP_M
-) -> List[Tuple[float, float, float]]:
+) -> list[tuple[float, float, float]]:
     """A spawned entity's ground footprint as clearance obstacles (x, y, r).
 
     Boxes become points along their outline (r = 0), so C_min measures the distance to
@@ -171,7 +174,7 @@ def footprint_points(
     yaw = float(entity.get("yaw", 0.0))
     c, s = math.cos(yaw), math.sin(yaw)
     corners = [(-sx / 2, -sy / 2), (sx / 2, -sy / 2), (sx / 2, sy / 2), (-sx / 2, sy / 2)]
-    pts: List[Tuple[float, float, float]] = []
+    pts: list[tuple[float, float, float]] = []
     for (ax, ay), (bx, by) in zip(corners, corners[1:] + corners[:1], strict=True):
         n = max(1, int(math.ceil(math.hypot(bx - ax, by - ay) / step)))
         for i in range(n):
@@ -181,8 +184,9 @@ def footprint_points(
 
 
 def dynamic_obstacles(
-    trajectory: Mapping[str, Any], spawned: Optional[Sequence[Mapping[str, Any]]] = None
-) -> List[Tuple[float, float, float]]:
+    trajectory: Mapping[str, Any], spawned: Sequence[Mapping[str, Any]] | None = None
+) -> list[tuple[float, float, float]]:
+    """Extract clearance obstacle points for all spawned entities during a run."""
     entries = (
         spawned
         if spawned is not None
@@ -194,12 +198,12 @@ def dynamic_obstacles(
 def score_recorded_run(
     trajectory: Mapping[str, Any],
     *,
-    run_dir: Optional[Path] = None,
-    spec: Any = None,
-    spawned: Optional[Sequence[Mapping[str, Any]]] = None,
-    nav_status: Optional[str] = None,
-    params: Optional[NQIParams] = None,
-) -> Dict[str, Any]:
+    run_dir: Path | None = None,
+    spec: SimSpec | Mapping[str, Any] | None = None,
+    spawned: Sequence[Mapping[str, Any]] | None = None,
+    nav_status: str | None = None,
+    params: NQIParams | None = None,
+) -> dict[str, Any]:
     """Score one recorded run. `trajectory` is Trajectory.to_dict() format (TelemetryRecordResult.trajectory).
 
     `params` None -> scoring_params(run_dir): Waffle chassis footprint + Nav2's goal tolerance."""
@@ -207,8 +211,8 @@ def score_recorded_run(
         params, _ = scoring_params(run_dir)
     traj = Trajectory.from_dict(trajectory)
     occupancy = load_occupancy(run_dir) if run_dir is not None else None
-    goal: Optional[XY] = traj.goal
-    l_opt: Optional[float] = None
+    goal: XY | None = traj.goal
+    l_opt: float | None = None
     l_method = None
     if spec is not None:
         targets = mission_targets(spec)
@@ -254,11 +258,11 @@ def score_recorded_run(
 def write_benchmark(
     run_dir: Path,
     nominal: Mapping[str, Any],
-    adversarial: Optional[Mapping[str, Any]] = None,
-    params: Optional[NQIParams] = None,
-    extra: Optional[Mapping[str, Any]] = None,
-    scoring: Optional[Mapping[str, Any]] = None,
-) -> Tuple[Path, Dict[str, Any]]:
+    adversarial: Mapping[str, Any] | None = None,
+    params: NQIParams | None = None,
+    extra: Mapping[str, Any] | None = None,
+    scoring: Mapping[str, Any] | None = None,
+) -> tuple[Path, dict[str, Any]]:
     """Build the report from scored runs and write <run_dir>/benchmark_report.json.
 
     `scoring` says where the params came from (scoring_params' second value)."""
@@ -285,7 +289,7 @@ KEEP_CLEAR_OF_TARGETS_M = (
 
 def _point_at_fraction(
     pts: Sequence[XY], seg: Sequence[float], fraction: float
-) -> Tuple[XY, float]:
+) -> tuple[XY, float]:
     """Point at `fraction` of the polyline length, and the path heading there."""
     target, acc = fraction * sum(seg), 0.0
     for i, d in enumerate(seg):
@@ -307,7 +311,7 @@ def default_stress_trigger(
     at_path_fraction: float = 0.6,
     fire_at_time_fraction: float = 0.35,
     keep_clear_m: float = KEEP_CLEAR_OF_TARGETS_M,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Archetype 4 default: drop a crate across the nominal path, ahead of the robot.
 
     The crate goes on the nominal trajectory near `at_path_fraction` of its length,
@@ -351,8 +355,8 @@ from lang2sim.runtime.telemetry_recorder import LABELS, load_recorded_runs  # no
 
 
 def score_run_folder(
-    run_dir: Path, goal_tolerance: Optional[float] = None
-) -> Tuple[Path, Dict[str, Any]]:
+    run_dir: Path, goal_tolerance: float | None = None
+) -> tuple[Path, dict[str, Any]]:
     """(Re)score every recorded run in a folder and write benchmark_report.json."""
     from lang2sim.core.models import SimSpec
 
@@ -404,7 +408,8 @@ def score_run_folder(
     )
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entrypoint to score a run folder and output benchmark reports."""
     import argparse
 
     ap = argparse.ArgumentParser(

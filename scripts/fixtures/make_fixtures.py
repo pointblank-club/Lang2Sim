@@ -21,8 +21,8 @@ Every mission waypoint is checked for >= 0.5 m clearance from obstacles.
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import List, Sequence, Tuple
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
@@ -54,9 +54,9 @@ def obj(
 
 
 def mission(
-    start: Tuple[float, float, float],
-    waypoints: Sequence[Tuple[float, float]],
-    goal: Tuple[float, float, float],
+    start: tuple[float, float, float],
+    waypoints: Sequence[tuple[float, float]],
+    goal: tuple[float, float, float],
 ) -> MissionSpec:
     return MissionSpec(
         initial_pose=Pose2D(x=start[0], y=start[1], yaw=start[2]),
@@ -86,7 +86,7 @@ def check_clearance(spec: SimSpec) -> None:
 
 
 def generate(
-    name: str, room: Tuple[float, float], objects: List[ObjectSpec], m: MissionSpec
+    name: str, room: tuple[float, float], objects: list[ObjectSpec], m: MissionSpec
 ) -> None:
     from lang2sim.compiler import compile_world_sdf, generate_simulation_ir
     from lang2sim.world_gen import slice_map_from_layout

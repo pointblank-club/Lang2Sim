@@ -45,8 +45,12 @@ import signal
 import subprocess
 import threading
 import time
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from lang2sim.runtime.nav2_dispatcher import NavDispatcher
 
 from fastapi import (
     APIRouter,
@@ -78,15 +82,28 @@ from lang2sim.runtime.health_monitor import HealthMonitor
 from lang2sim.runtime.ros_bridge import readiness
 from lang2sim.runtime.self_healing import NodeControl, Observation, SelfHealer, classify
 
+
+class _RecordingBridge(Protocol):
+    def record_start(
+        self,
+        label: str,
+        goal: tuple[float, float, float] | None = None,
+        rate_hz: float = 20.0,
+        stream_path: Path | None = None,
+    ) -> None: ...
+
+    def record_stop(self, keep_partial: bool = False) -> dict[str, Any] | None: ...
+
+
 RUNTIME_ENV_FILE = Path(os.getenv("L2S_RUNTIME_ENV_FILE", "/tmp/l2s_runtime.env"))
 LOG_RING_LINES = 2000
 LAUNCH_GRACE_S = 3.0
 _STARTED_AT = time.time()
 
 
-def read_runtime_env(path: Path = RUNTIME_ENV_FILE) -> Dict[str, str]:
+def read_runtime_env(path: Path = RUNTIME_ENV_FILE) -> dict[str, str]:
     """KEY=VALUE file written by the entrypoint."""
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     try:
         for line in path.read_text().splitlines():
             if "=" in line:
@@ -97,7 +114,7 @@ def read_runtime_env(path: Path = RUNTIME_ENV_FILE) -> Dict[str, str]:
     return out
 
 
-def model_search_paths(run_dir: Path) -> List[Path]:
+def model_search_paths(run_dir: Path) -> list[Path]:
     """Where model:// URIs may resolve: Gazebo's path, TurtleBot3 models, catalog, the run's own models/."""
     paths = world_check.default_model_paths()
     for p in (
@@ -113,7 +130,7 @@ def model_search_paths(run_dir: Path) -> List[Path]:
 ROBOT_NAME = "waffle"  # TurtleBot3 variant, and the entity name it is spawned under
 
 
-def tb3_gazebo_share() -> Optional[Path]:
+def tb3_gazebo_share() -> Path | None:
     """turtlebot3_gazebo's share directory inside the container, or None."""
     try:
         from ament_index_python.packages import (  # type: ignore[import-not-found]
@@ -127,7 +144,9 @@ def tb3_gazebo_share() -> Optional[Path]:
 
 
 class WorldRejected(Exception):
-    def __init__(self, report: world_check.WorldReport):
+    """Raised when an SDF world fails pre-flight validation checks before launch."""
+
+    def __init__(self, report: world_check.WorldReport) -> None:
         super().__init__(report.summary())
         self.report = report
 
@@ -137,22 +156,22 @@ class SimProcess:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self.proc: Optional[subprocess.Popen] = None
-        self.request: Optional[SimStartRequest] = None
-        self.started_at: Optional[float] = None
+        self.proc: subprocess.Popen | None = None
+        self.request: SimStartRequest | None = None
+        self.started_at: float | None = None
         self.stopped = False
         self.was_ready = False
-        self.world_report: Optional[world_check.WorldReport] = None
-        self.launch_file: Optional[Path] = None
-        self.telemetry_setup: Dict[str, Any] = {
+        self.world_report: world_check.WorldReport | None = None
+        self.launch_file: Path | None = None
+        self.telemetry_setup: dict[str, Any] = {
             "enabled": False,
             "collision": None,
             "reason": "not started",
         }
         self.world_name: str = ""
-        self.log: Deque[str] = collections.deque(maxlen=LOG_RING_LINES)
+        self.log: collections.deque[str] = collections.deque(maxlen=LOG_RING_LINES)
         self.lines_total = 0  # monotonic, unlike the ring's length
-        self._log_file: Optional[Path] = None
+        self._log_file: Path | None = None
 
     # --- preparation ---------------------------------------------------------
     def prepare(self, req: SimStartRequest) -> Path:
@@ -228,15 +247,17 @@ class SimProcess:
         return "", ""
 
     # Overridden in tests.
-    def build_command(self, req: SimStartRequest) -> List[str]:
+    def build_command(self, req: SimStartRequest) -> list[str]:
+        """Build the ROS launch command for a simulation start request."""
         return ["ros2", "launch", str(self.launch_file)]
 
     # --- lifecycle -----------------------------------------------------------
     @property
     def alive(self) -> bool:
+        """Report whether the simulation subprocess is still running."""
         return self.proc is not None and self.proc.poll() is None
 
-    def status(self, ready: Optional[bool] = None) -> str:
+    def status(self, ready: bool | None = None) -> str:
         """idle | launching | running | degraded | stopped | error.
 
         `ready` comes from the ROS readiness checks (None = no ROS bridge here).
@@ -255,6 +276,7 @@ class SimProcess:
         return "degraded" if self.was_ready else "launching"
 
     def start(self, req: SimStartRequest) -> None:
+        """Prepare run files, launch the simulation process, and capture its logs."""
         with self._lock:
             if self.alive:
                 raise RuntimeError("simulation already running")
@@ -281,7 +303,7 @@ class SimProcess:
                 target=self._pump, args=(self.proc, self._log_file), daemon=True
             ).start()
 
-    def _pump(self, proc: subprocess.Popen, log_file: Optional[Path]) -> None:
+    def _pump(self, proc: subprocess.Popen, log_file: Path | None) -> None:
         assert proc.stdout is not None
         fh = open(log_file, "a", buffering=1) if log_file else None
         try:
@@ -295,6 +317,7 @@ class SimProcess:
                 fh.close()
 
     def stop(self, force: bool = False, grace_s: float = 15.0) -> None:
+        """Stop the simulation process, escalating to a kill after the grace period."""
         with self._lock:
             proc = self.proc
             self.stopped = True
@@ -324,7 +347,8 @@ class SimProcess:
                 except ProcessLookupError:
                     pass
 
-    def tail(self, n: int) -> List[str]:
+    def tail(self, n: int) -> list[str]:
+        """Return the latest ``n`` lines retained in the in-memory log buffer."""
         return list(self.log)[-n:]
 
     def lines_since(self, seen: int) -> tuple:
@@ -343,10 +367,10 @@ HEAL_PERIOD_S = 2.0
 
 
 def create_app(
-    sim: Optional[SimProcess] = None,
+    sim: SimProcess | None = None,
     use_ros: bool = True,
-    nav: Any = None,
-    node_control: Optional[Callable[[Path], Any]] = None,
+    nav: NavDispatcher | None = None,
+    node_control: Callable[[Path], Any] | None = None,
 ) -> FastAPI:
     """`use_ros=False` (tests) skips the rclpy bridge and the healer thread; both are also
     skipped where ROS is absent.
@@ -355,7 +379,7 @@ def create_app(
     Self-healing is on unless L2S_SELF_HEAL=0.
     """
     sim = sim or SimProcess()
-    state: Dict[str, Any] = {
+    state: dict[str, Any] = {
         "bridge": None,
         "nav": nav,
         "healer": None,
@@ -369,7 +393,7 @@ def create_app(
     heal_enabled = os.getenv("L2S_SELF_HEAL", "1") != "0"
 
     @contextlib.asynccontextmanager
-    async def lifespan(_app: FastAPI):
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         stop = threading.Event()
         if use_ros:
             from lang2sim.runtime.ros_bridge import RosBridge
@@ -441,7 +465,7 @@ def create_app(
             health_status=health,
         )
 
-    def dispatcher():
+    def dispatcher() -> NavDispatcher:
         if state["nav"] is None:
             from lang2sim.runtime.nav2_dispatcher import NavDispatcher
 
@@ -458,7 +482,7 @@ def create_app(
                 + (f" (waiting for: {', '.join(failed)})" if failed else ""),
             )
 
-    def heal_tick() -> List[dict]:
+    def heal_tick() -> list[dict]:
         """One supervisor pass: observe, classify, recover. Called every HEAL_PERIOD_S."""
         healer = state["healer"]
         if healer is None or not sim.alive:
@@ -483,7 +507,7 @@ def create_app(
             state["nodes"].stop_all()
         nodes = make_nodes(Path(req.run_dir))
 
-        def current_goal():
+        def current_goal() -> Pose2D | None:
             st = state["nav"].status() if state["nav"] else None
             return st.target_pose if st and (st.is_active or st.status == "failed") else None
 
@@ -559,7 +583,7 @@ def create_app(
         return current_status()
 
     @v1.post("/sim/stop", response_model=SimStatusResponse)
-    def sim_stop(req: Optional[SimStopRequest] = None) -> SimStatusResponse:
+    def sim_stop(req: SimStopRequest | None = None) -> SimStatusResponse:
         sim.stop(force=bool(req and req.force))
         return current_status()
 
@@ -622,7 +646,7 @@ def create_app(
             return TelemetryLive()
         return TelemetryLive(**bridge.live())
 
-    def point_world_bridge(world_name: str, logs_dir: Optional[Path] = None) -> None:
+    def point_world_bridge(world_name: str, logs_dir: Path | None = None) -> None:
         """Aim Part 4's /v1/world mutations (spawn, light, reset) at this run's Gazebo world
         (otherwise they target /world/default and silently do nothing), and log spawns into
         the run folder."""
@@ -637,7 +661,7 @@ def create_app(
         clear_spawn_log()
         set_spawn_log_file(str(logs_dir / "spawns.jsonl") if logs_dir is not None else None)
 
-    def recording_bridge():
+    def recording_bridge() -> _RecordingBridge:
         bridge = state["bridge"]
         if bridge is None or not hasattr(bridge, "record_start"):
             raise HTTPException(
@@ -746,7 +770,7 @@ def create_app(
     app.include_router(v1)
 
     # Live benchmark dashboard (http://localhost:9090/dashboard) + /v1/run data routes.
-    def spawned_now() -> List[Dict[str, Any]]:
+    def spawned_now() -> list[dict[str, Any]]:
         try:
             from lang2sim.perturbation.routers.world import spawned_since
 
